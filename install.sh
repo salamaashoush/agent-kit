@@ -25,12 +25,20 @@ link() {
 $DRY_RUN && echo "dry run, nothing will change"
 echo "installing into $CLAUDE"
 
-$DRY_RUN || mkdir -p "$CLAUDE"
+$DRY_RUN || mkdir -p "$CLAUDE/skills"
 
 for f in CLAUDE.md RTK.md; do
   link "$REPO/$f" "$CLAUDE/$f"
 done
 
+for d in "$REPO"/skills/*/; do
+  link "${d%/}" "$CLAUDE/skills/$(basename "$d")"
+done
+
+# A stable path, so CLAUDE.md and any skill can name it without knowing where
+# this repo was cloned.
+link "$REPO/tools/mylint.py" "$CLAUDE/mylint.py"
+
 echo
-echo "mylint stays in the repo:"
-echo "  python3 $REPO/tools/mylint.py --pr <file>"
+echo "mylint:"
+echo "  python3 ~/.claude/mylint.py --pr <file>"

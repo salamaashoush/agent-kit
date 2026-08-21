@@ -168,7 +168,7 @@ Bullets are normal (I average ten a PR) and so is the occasional bold span. Aim
 at 110 words rather than 180. Lead with what changed and why, link the ticket,
 and stop.
 
-`python3 ~/Workspace/unslop-samples/mylint.py --pr <file>` and `--commit` check
+`python3 ~/.claude/mylint.py --pr <file>` and `--commit` check
 these, and `mylint.py <file>` catches my own spelling and run-ons. If that path
 is gone, say so rather than skipping the check.
 

@@ -1,8 +1,13 @@
 # agent-kit
 
 My coding-agent setup, versioned: the global instructions every project loads,
-and the lint that checks what I write. Skills live with the tool that manages
-them, not here.
+the lint that checks what I write, and the skills I want to keep editing.
+
+Third-party skills are **vendored rather than submoduled**, so I can change them
+without waiting on upstream or losing the change to a pull. Every one is
+attributed below, with its licence in `vendor-licenses/`. The cost is that a
+fix upstream will not arrive on its own; re-sync by diffing against the source
+repo.
 
 Everything here installs by symlink, so editing a file in this repo changes what
 the agent reads immediately, and `git pull` on another machine is the whole
@@ -19,18 +24,20 @@ update.
 | --- | --- | --- |
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` | Global instructions, loaded on every turn of every project |
 | `RTK.md` | `~/.claude/RTK.md` | Imported by `CLAUDE.md` |
-| `tools/mylint.py` | stays here | Checks a draft, a commit message, or a PR body |
+| `tools/mylint.py` | `~/.claude/mylint.py` | Checks a draft, a commit message, or a PR body |
+| `skills/*` | `~/.claude/skills/*` | See the attribution table |
+| `vendor-licenses/` | stays here | Licences of the vendored skills |
 
 ## mylint
 
 Three modes, all exiting non-zero when they find something:
 
 ```sh
-python3 tools/mylint.py draft.md                        # spelling and run-ons
-python3 tools/mylint.py --commit msg.txt                # commit-message shape
-python3 tools/mylint.py --pr body.md                    # PR-description shape
-git show -s --format=%B HEAD | python3 tools/mylint.py --commit
-pbpaste | python3 tools/mylint.py
+python3 ~/.claude/mylint.py draft.md                        # spelling and run-ons
+python3 ~/.claude/mylint.py --commit msg.txt                # commit-message shape
+python3 ~/.claude/mylint.py --pr body.md                    # PR-description shape
+git show -s --format=%B HEAD | python3 ~/.claude/mylint.py --commit
+pbpaste | python3 ~/.claude/mylint.py
 ```
 
 The thresholds come from measurement rather than taste. Seven misspellings
@@ -44,29 +51,34 @@ those are not the tell.
 Rerun the numbers against a fresh sample before trusting them on someone else's
 writing. They describe one person.
 
+## Skills, and where each came from
+
+| Skill | Origin | Licence | Changed from upstream |
+| --- | --- | --- | --- |
+| `writing-for-agents` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
+| `diagnosing-bugs` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
+| `resolving-merge-conflicts` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
+| `grill-me` / `grilling` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
+| `spec-review` | [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` | MIT | renamed, so it stops colliding with the built-in `/code-review`; description points at my own review skill for correctness passes |
+| `careful` | [no-session/pstack](https://github.com/no-session/pstack) | MIT | `sed` portability fix, see below |
+| `unslop` | [theclaymethod/unslop](https://github.com/theclaymethod/unslop) | MIT (declared in its frontmatter; the repo ships no LICENSE file) | runtime only: `SKILL.md`, `references/`, `presets/`, `scripts/`. Its `evals/` and `plans/` stay upstream |
+
+`careful` needed a fix to work on macOS at all. `check-careful.sh` used GNU `\s`
+inside `sed -E`, which BSD sed does not understand, so the argument extraction
+returned the whole command, every target looked unsafe, and it warned on every
+`rm -rf node_modules` despite documenting that as an exception. Eighteen
+occurrences are now `[[:space:]]`. Worth upstreaming: it affects every macOS
+user.
+
+`careful` is also wired as an always-on `PreToolUse` hook in `settings.json`
+rather than left session-scoped, and it sits ahead of any command-rewriting hook
+so it reads what was actually typed. Note it returns `permissionDecision: "ask"`,
+which may not stop anything under bypass-permissions mode; `"deny"` is the
+stronger setting if that turns out to matter.
+
 ## What is deliberately not here
 
-**Skills.** Each one belongs to whatever installs it: the ones my own CLI ships
-are versioned in that repo and written to `~/.claude/skills` on install, and the
-third-party ones below stay symlinked to their own clones so upstream keeps
-updating them. Copying either kind here would fork it, and the two copies would
-drift the first time one side changed.
+**Skills another tool installs.** Those are versioned in the repo that ships
+them and written to `~/.claude/skills` on install. A copy here would fork them.
 
 **Credentials and `settings.json`**, which should never reach a remote.
-
-## Third-party skills
-
-Installed separately, symlinked from their own clones so upstream keeps
-updating them:
-
-- [`mattpocock/skills`](https://github.com/mattpocock/skills): `writing-for-agents`,
-  `diagnosing-bugs`, `resolving-merge-conflicts`
-- [`no-session/pstack`](https://github.com/no-session/pstack): `careful`, a
-  `PreToolUse` hook that stops `rm -rf`, `git reset --hard`, and force-pushes
-- [`theclaymethod/unslop`](https://github.com/theclaymethod/unslop): removes AI
-  writing patterns from prose
-
-`careful` ships a portability bug worth knowing about: `check-careful.sh` uses
-GNU `\s` inside `sed -E`, which BSD sed on macOS does not understand, so the
-safe-exception list silently fails and it warns on every `rm -rf node_modules`.
-Replace `\s` with `[[:space:]]` after cloning.

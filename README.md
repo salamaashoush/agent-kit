@@ -1,7 +1,8 @@
 # agent-kit
 
-My coding-agent setup, versioned. Global instructions, the writing lint, and the
-skills that are not tied to one job or one codebase.
+My coding-agent setup, versioned: the global instructions every project loads,
+and the lint that checks what I write. Skills live with the tool that manages
+them, not here.
 
 Everything here installs by symlink, so editing a file in this repo changes what
 the agent reads immediately, and `git pull` on another machine is the whole
@@ -19,8 +20,6 @@ update.
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` | Global instructions, loaded on every turn of every project |
 | `RTK.md` | `~/.claude/RTK.md` | Imported by `CLAUDE.md` |
 | `tools/mylint.py` | stays here | Checks a draft, a commit message, or a PR body |
-| `skills/code-review` | `~/.claude/skills/code-review` | Correctness first, then reuse, simplification, efficiency, altitude, prose |
-| `skills/address-review` | `~/.claude/skills/address-review` | Work through reviewer feedback on your own PR and reply per thread |
 
 ## mylint
 
@@ -47,8 +46,13 @@ writing. They describe one person.
 
 ## What is deliberately not here
 
-Work-specific skills, credentials, and `settings.json`. The first belong
-with the codebase they serve, and the last two should never reach a remote.
+**Skills.** Each one belongs to whatever installs it: the ones my own CLI ships
+are versioned in that repo and written to `~/.claude/skills` on install, and the
+third-party ones below stay symlinked to their own clones so upstream keeps
+updating them. Copying either kind here would fork it, and the two copies would
+drift the first time one side changed.
+
+**Credentials and `settings.json`**, which should never reach a remote.
 
 ## Third-party skills
 

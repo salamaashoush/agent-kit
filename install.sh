@@ -13,12 +13,6 @@ link() {
     printf '  ok       %s\n' "${dest#"$HOME"/}"
     return
   fi
-  # A directory carrying a .version marker belongs to another installer; taking
-  # it over here would fork it silently and both copies would drift.
-  if [ -f "$dest/.version" ]; then
-    printf '  skip     %s (managed by another installer)\n' "${dest#"$HOME"/}"
-    return
-  fi
   # A real file here is the user's own, so back it up rather than clobber it.
   if [ -e "$dest" ] && [ ! -L "$dest" ]; then
     printf '  backup   %s -> %s.bak-%s\n' "${dest#"$HOME"/}" "${dest#"$HOME"/}" "$(date +%F)"
@@ -31,14 +25,10 @@ link() {
 $DRY_RUN && echo "dry run, nothing will change"
 echo "installing into $CLAUDE"
 
-$DRY_RUN || mkdir -p "$CLAUDE/skills"
+$DRY_RUN || mkdir -p "$CLAUDE"
 
 for f in CLAUDE.md RTK.md; do
   link "$REPO/$f" "$CLAUDE/$f"
-done
-
-for d in "$REPO"/skills/*/; do
-  link "${d%/}" "$CLAUDE/skills/$(basename "$d")"
 done
 
 echo

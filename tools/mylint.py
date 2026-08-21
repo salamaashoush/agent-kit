@@ -5,6 +5,7 @@ then hand it to unslop's scanners for the AI tells.
     python3 mylint.py draft.md
     pbpaste | python3 mylint.py
     python3 mylint.py --pr body.md      # also check the PR-description tells
+    python3 mylint.py --private            # private names, per ~/.claude/private-names.json
     python3 mylint.py --commit msg.txt  # ...or the commit-message ones
     git show -s --format=%B HEAD | python3 mylint.py --commit
 
@@ -14,6 +15,7 @@ else in that corpus already scans clean, so this checks those two and stops.
 """
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -125,6 +127,61 @@ def check_commit(text: str):
             yield f"AI signature: {signature!r}"
 
 
+# The list itself lives outside this repo. Writing a private name here in order to
+# catch it would publish it, so only the shape is versioned, in
+# config/private-names.example.json.
+PRIVATE_NAMES = pathlib.Path(
+    os.environ.get("MYLINT_PRIVATE_NAMES")
+    or pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude")
+    / "private-names.json"
+)
+
+
+def private_rules():
+    """(patterns, allow), or None when this machine has no list to check against.
+
+    A pattern is deliberately specific. Matching a bare company name also hits
+    the identifiers that merely contain it, which is how a careless sweep turns
+    into a bad diff, so `allow` carries the substrings that clear a line."""
+    try:
+        rules = json.loads(PRIVATE_NAMES.read_text())
+    except FileNotFoundError:
+        return None
+    except ValueError as err:
+        sys.exit(f"{PRIVATE_NAMES} is not valid JSON ({err})")
+    patterns = [(entry["match"], entry["why"]) for entry in rules.get("patterns", [])]
+    return patterns, tuple(rules.get("allow", ()))
+
+
+def tracked_files(root: str = "."):
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=root,
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        return []
+    return [f for f in out.stdout.split("\0") if f]
+
+
+def check_private(root, patterns, allow):
+    files = tracked_files(root)
+    if not files:
+        yield None, 0, "not a git repository, or no tracked files", ""
+        return
+    for name in files:
+        path = pathlib.Path(root) / name
+        try:
+            text = path.read_text(errors="strict")
+        except (UnicodeDecodeError, OSError):
+            continue  # binary or unreadable
+        for number, line in enumerate(text.splitlines(), 1):
+            if any(ok in line for ok in allow):
+                continue
+            for pattern, why in patterns:
+                found = re.search(pattern, line)
+                if found:
+                    yield name, number, f"{why}: {found.group()}", line.strip()[:90]
+                    break
+
+
 def scan(script: str, text: str):
     out = subprocess.run(
         ["python3", str(UNSLOP / script)], input=text, capture_output=True, text=True
@@ -135,8 +192,32 @@ def scan(script: str, text: str):
         return {}
 
 
+def report_private(args) -> int:
+    rules = private_rules()
+    if rules is None:
+        print(f"no private names list at {PRIVATE_NAMES}")
+        print("copy config/private-names.example.json there and put the real names in")
+        print("it, since those stay out of this repo on purpose")
+        return 2
+    root = args[0] if args else "."
+    hits = list(check_private(root, *rules))
+    if hits and hits[0][0] is None:
+        print(hits[0][2])
+        return 0
+    for name, number, why, line in hits:
+        print(f"{name}:{number}  {why}")
+        print(f"    {line}")
+    print(f"\n{len(hits)} private name{'' if len(hits) == 1 else 's'} in tracked files")
+    if hits:
+        print("replace with a neutral stand-in (acme, example.com, APP_PASSWORD),")
+        print("and read the result: phrase replacement leaves grammar behind it")
+    return 1 if hits else 0
+
+
 def main() -> int:
     args = sys.argv[1:]
+    if "--private" in args:
+        return report_private([a for a in args if a != "--private"])
     as_pr = "--pr" in args
     as_commit = "--commit" in args
     args = [a for a in args if a not in ("--pr", "--commit")]

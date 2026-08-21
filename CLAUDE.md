@@ -82,9 +82,8 @@ keys wherever focus happens to be, and a stray Escape has cancelled my work.
   catalogues, generated type declarations, bundles, lockfiles, build output,
   schema-generated code. Fix the source of truth or the build. When a build
   cannot see a new source, the answer is usually the entry graph or the config.
-- Style comes from the surrounding code. Test fixtures use `sashoush` /
-  `sashoush` so teammates' names stay out of committed test data, and a public
-  repo gets a neutral placeholder rather than any real address.
+- Style comes from the surrounding code. Test fixtures name me rather than a
+  teammate, so nobody else's name lands in committed test data.
 
 **Comments in code you write.** The default is none. Leave existing comments
 alone unless the change makes them wrong. A comment earns its place by carrying
@@ -106,6 +105,35 @@ content-hashed class from someone else's build (`:global(.modal_scroll--97abf)`,
 instead for the component's own `className` or slot props, a wrapper element you
 own, the library's documented extension points, or an upstream issue. Typing
 `:global(` at a hashed class means the structure is wrong; fix the structure.
+
+## Public repos stay generic
+
+Treat this as a release gate
+rather than a style preference.
+
+Anything published under my own name (ferridriver and everything like it) stays
+free of names from private or client work: no company URLs, no `@company/...` package
+specifiers, no `COMPANY_*` environment variables, no product names in comments,
+no internal hostnames, no teammate names, no real addresses. Fixtures, doc
+examples, and config samples all use neutral stand-ins: `acme`, `example.com`,
+`APP_PASSWORD`, `API_TOKEN`.
+
+Sweep before publishing, and again before any push that adds documentation or
+fixtures:
+
+```
+python3 ~/.claude/mylint.py --private
+```
+
+Two traps make a careless cleanup worse than none. Replacing a bare company
+name catches unrelated identifiers, so match specific phrases rather than the
+word alone. And phrase replacement leaves grammar behind it ("a Company gateway"
+becoming "a the gateway"), so read the result rather than trusting the
+substitution.
+
+Scrubbing history when something already landed means rewriting every commit,
+so keep a mirror of the repository before starting and expect every SHA to
+change.
 
 **No emoji in code, documentation, or a commit message.** My own Slack and
 review comments use them and should keep doing so.

@@ -123,7 +123,9 @@ Third-party skills are **vendored rather than submoduled**, so I can change them
 without waiting on upstream or losing the change to a pull. Every one is
 attributed below, with its licence in `vendor-licenses/`. The cost is that a
 fix upstream will not arrive on its own; re-sync by diffing against the source
-repo.
+repo. Checked on 2026-08-29 against pstack `9a24d14`, mattpocock/skills
+`6654f6b` and unslop `d81f519`: every vendored file matches byte for byte except
+the two below, both deliberate.
 
 | Skill | Origin | Licence | Changed from upstream |
 | --- | --- | --- | --- |
@@ -132,7 +134,7 @@ repo.
 | `resolving-merge-conflicts` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
 | `grill-me` / `grilling` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
 | `spec-review` | [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` | MIT | renamed, so it stops colliding with the built-in `/code-review`, which its description now points at for correctness passes |
-| `careful` | [no-session/pstack](https://github.com/no-session/pstack) | MIT | `sed` portability fix, see below |
+| `careful` | [no-session/pstack](https://github.com/no-session/pstack) | MIT | BSD `sed` fix, then a rewrite onto bash builtins, see below |
 | `unslop` | [theclaymethod/unslop](https://github.com/theclaymethod/unslop) | MIT (declared in its frontmatter; the repo ships no LICENSE file) | runtime only: `SKILL.md`, `references/`, `presets/`, `scripts/`. Its `evals/` and `plans/` stay upstream |
 
 `careful` needed a fix to work on macOS at all. `check-careful.sh` used GNU `\s`
@@ -141,6 +143,13 @@ returned the whole command, every target looked unsafe, and it warned on every
 `rm -rf node_modules` despite documenting that as an exception. Eighteen
 occurrences are now `[[:space:]]`. Worth upstreaming: it affects every macOS
 user.
+
+The second change is the hook's cost. It fires on every Bash tool call, and
+`cat`, `grep`, `sed` and `tr` meant four forks a call, roughly 30s across a
+median session of 290 of them. Matching is now `[[ =~ ]]`, `nocasematch` and
+parameter expansion, with subprocesses left on the warn path, which fires
+rarely. That one stays here: it is a rewrite of the file, not a portability fix,
+and upstream may not want it.
 
 It runs as an always-on hook rather than a session-scoped skill, installed by
 `install.sh` and named through `~/.claude/skills/careful`, so moving this clone

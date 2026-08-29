@@ -30,6 +30,7 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 | `config/private-names.example.json` | copied by hand to `~/.claude/private-names.json` | The shape of the `--private` list, never the list |
 | `tools/docs/*.md` | `tools.local.md`, which `CLAUDE.md` imports | Notes on a tool, loaded only where that tool exists |
 | `tools/mylint.py` | `~/.claude/mylint.py` | Checks a draft, a commit message, or a PR body |
+| `tools/statusline.sh` | `~/.claude/statusline.sh`, named by `statusLine` | The status line, wired only where `jq` exists |
 | `tools/install.py` | stays here | The installer `install.sh` runs |
 | `skills/*` | `~/.claude/skills/*` | See the attribution table |
 | `vendor-licenses/` | stays here | Licences of the vendored skills |
@@ -41,6 +42,7 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 | `careful` | this repo | `PreToolUse` hook on `Bash` |
 | `rtk` | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | `PreToolUse` hook on `Bash`, plus notes in `CLAUDE.md` |
 | `ferridriver` | [salamaashoush/ferridriver](https://github.com/salamaashoush/ferridriver) | MCP server, plus notes in `CLAUDE.md` |
+| `statusline` | this repo | `statusLine` in `settings.json`, needing `jq` |
 
 Adding one is a block in `config/tools.toml`:
 
@@ -56,6 +58,10 @@ command = "mockpit"
 args = ["mcp"]
 ```
 
+A `statusline = "tools/x.sh"` key is the third thing a block can wire: the script
+is symlinked next to the settings that name it, so the path in `settings.json`
+survives this clone moving, the same way the `careful` hook does.
+
 `probe` is the whole conditional. No binary means no hook, no MCP server, and no
 notes in the context, so the same clone installs cleanly on a machine that has
 none of these. Hook order inside one event follows this file, which is why
@@ -70,9 +76,10 @@ before the first edit of the day, and the only symlinks it ever removes are ones
 pointing into this repo. `--dry-run` prints the settings diff without writing.
 
 **Keep a key it does not name.** The merge touches the keys in
-`config/preferences.json`, the hooks and MCP servers in `config/tools.toml`, and
-nothing else, so servers, plugins and status line from other work stay where they
-are. A list, `permissions.deny` in practice, is joined rather than replaced.
+`config/preferences.json`, and the hooks, MCP servers and status line named in
+`config/tools.toml`. Nothing else, so servers and plugins from other work stay
+where they are. A list, `permissions.deny` in practice, is joined rather than
+replaced.
 
 **Forget what it replaced.** `~/.claude/agent-kit.state.json` holds the previous
 value of every key, hook and server it changed, and `--uninstall` reads that
@@ -80,6 +87,30 @@ back. A round trip on this machine's settings returns the file byte for byte.
 
 **Version anything private.** Credentials, work config, the `--private`
 patterns and the generated `tools.local.md` all stay out of git.
+
+## The status line
+
+```
+ ~/Workspace/agent-kit  󰘬 main +2 ~1 ?3  󰙅 fix-login  󱙺 Opus 5  󰾆 ━━━━━━━━━━  37%  󰓅 5h42% 7d18%  $1.23  󰥔 12m
+```
+
+Folder, branch with working-tree counts, the worktree when you are in one, model,
+context bar, rate limits, cost and session length. Every segment past the folder
+appears only when it has something to say.
+
+It renders on every update, so it is written to fork once. One `jq` call reads
+the whole payload; the branch and the worktree come from reading `.git` and
+`.git/HEAD` directly rather than from `git rev-parse`; the bar, the percentages
+and the durations are `printf -v` and shell arithmetic. Only the working-tree
+counts need a subprocess, and that one sits behind a five-second cache keyed on
+session and directory, with its timestamp inside the file so reading it back
+costs no `stat` either. Measured against the version this replaced, seven
+external commands a render became one, and 80ms became 18ms, of which 11ms is
+bash starting up.
+
+Colour is Tokyo Night Storm, in truecolor where `COLORTERM` claims it and 256
+otherwise. The glyphs need a Nerd Font; `TERM=linux`, `TERM=dumb` or
+`CLAUDE_STATUSLINE_ASCII=1` drops to plain text rather than a row of boxes.
 
 ## mylint
 

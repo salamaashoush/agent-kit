@@ -67,7 +67,7 @@ def plan() -> dict:
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CLAUDE / "skills" / skill.name))
 
-    hooks, mcp, docs, present = [], {}, [], {}
+    hooks, mcp, docs, present, status = [], {}, [], {}, None
     for name, tool in registry().items():
         where = located(tool)
         if not where:
@@ -85,7 +85,13 @@ def plan() -> dict:
             mcp[name] = tool["mcp"]
         if "doc" in tool:
             docs.append(tool["doc"])
-    return {"links": links, "hooks": hooks, "mcp": mcp, "docs": docs, "present": present}
+        if "statusline" in tool:
+            script = REPO / tool["statusline"]
+            links.append((script, CLAUDE / script.name))
+            status = {"type": "command",
+                      "command": f"bash {shlex.quote(str(CLAUDE / script.name))}"}
+    return {"links": links, "hooks": hooks, "mcp": mcp, "docs": docs,
+            "present": present, "statusLine": status}
 
 
 # --- settings.json -------------------------------------------------------------
@@ -234,6 +240,20 @@ def merge_mcp(settings: dict, servers: dict):
     return record, changes
 
 
+def merge_statusline(settings: dict, status):
+    """Replaced whole rather than key by key: a status line is one setting, and a
+    leftover key from the shape that was there before would be read as ours."""
+    if not status:
+        return None, []
+    existing = settings.get("statusLine", MISSING)
+    record = {"had": existing is not MISSING,
+              "was": None if existing is MISSING else existing}
+    if existing == status:
+        return record, []
+    settings["statusLine"] = status
+    return record, [f"statusLine: {status['command']}"]
+
+
 def write_settings(settings: dict, dry_run: bool):
     body = json.dumps(settings, indent=2) + "\n"
     if SETTINGS.exists() and SETTINGS.read_text() == body:
@@ -304,7 +324,7 @@ def write_tools_local(docs: list, dry_run: bool):
     return True
 
 
-def remembered(previous: dict, hooks: list, prefs: list, mcp: list):
+def remembered(previous: dict, hooks: list, prefs: list, mcp: list, status):
     """Only the first install saw the values that predate this repo. A later run
     displaces the installer's own entries, so it inherits that memory instead of
     recording itself as the thing to put back."""
@@ -327,6 +347,9 @@ def remembered(previous: dict, hooks: list, prefs: list, mcp: list):
         source = by_name.get(record["name"])
         if source:
             record.update({"had": source["had"], "was": source["was"]})
+
+    if status is not None and previous.get("statusLine"):
+        status.update(previous["statusLine"])
 
 
 # --- commands ------------------------------------------------------------------
@@ -351,11 +374,12 @@ def install(dry_run: bool):
     prefs_record, prefs_changes = merge_preferences(settings, preferences())
     hooks_record, hooks_changes = merge_hooks(settings, steps["hooks"])
     mcp_record, mcp_changes = merge_mcp(settings, steps["mcp"])
+    status_record, status_changes = merge_statusline(settings, steps["statusLine"])
 
     print(f"\nsettings ({short(SETTINGS)})")
-    for change in prefs_changes + hooks_changes + mcp_changes:
+    for change in prefs_changes + hooks_changes + mcp_changes + status_changes:
         print(f"  {change}")
-    if not (prefs_changes or hooks_changes or mcp_changes):
+    if not (prefs_changes or hooks_changes or mcp_changes or status_changes):
         print("  already current")
 
     before = SETTINGS.read_text() if SETTINGS.exists() else ""
@@ -366,7 +390,7 @@ def install(dry_run: bool):
                                         "settings.json", "settings.json (after)", lineterm=""):
             print(f"  {row}")
 
-    remembered(before_this_run, hooks_record, prefs_record, mcp_record)
+    remembered(before_this_run, hooks_record, prefs_record, mcp_record, status_record)
     if not dry_run:
         STATE.write_text(json.dumps({
             "version": 1,
@@ -376,6 +400,7 @@ def install(dry_run: bool):
             "preferences": prefs_record,
             "hooks": hooks_record,
             "mcpServers": mcp_record,
+            "statusLine": status_record,
         }, indent=2) + "\n")
         print()
         doctor()
@@ -435,6 +460,15 @@ def uninstall(dry_run: bool):
         if not servers:
             settings.pop("mcpServers", None)
 
+    status = saved.get("statusLine")
+    if status:
+        if status["had"]:
+            settings["statusLine"] = status["was"]
+            print("  restore  statusLine")
+        else:
+            settings.pop("statusLine", None)
+            print("  remove   statusLine")
+
     write_settings(settings, dry_run)
     if TOOLS_LOCAL.exists():
         print(f"  remove   {short(TOOLS_LOCAL)}")
@@ -459,6 +493,8 @@ def doctor():
                 wired.append("mcp")
             if tool.get("doc"):
                 wired.append("doc")
+            if tool.get("statusline"):
+                wired.append("status line")
             print(f"  ok       {name:14} {', '.join(wired) or 'skill'}")
         else:
             hint = tool.get("source", "")
@@ -475,6 +511,10 @@ def doctor():
                        for group in groups for h in group.get("hooks", [])}
     for hook in steps["hooks"]:
         report(f"hook {hook['tool']}", hook["command"] in installed_hooks, hook["command"])
+
+    if steps["statusLine"]:
+        report("status line", settings.get("statusLine") == steps["statusLine"],
+               steps["statusLine"]["command"])
 
     for name in steps["mcp"]:
         here = name in settings.get("mcpServers", {})

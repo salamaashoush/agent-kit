@@ -38,3 +38,11 @@ doc = "tools/docs/ferridriver.md"
 type = "stdio"
 command = "ferridriver"
 args = ["mcp"]
+
+[statusline]
+what = "Folder, branch, model and a context-usage bar, in one line."
+probe = "jq"
+source = "jq: brew install jq, or pacman -S jq"
+# The script is symlinked next to the settings that name it, so the path in
+# settings.json survives this clone moving. A Nerd Font renders the glyphs.
+statusline = "tools/statusline.sh"

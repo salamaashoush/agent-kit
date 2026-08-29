@@ -41,6 +41,7 @@ if [ "$COLORTERM" = truecolor ] || [ "$COLORTERM" = 24bit ]; then
   C_MID=$'\e[38;2;224;175;104m'    # #e0af68 yellow
   C_HIGH=$'\e[38;2;247;118;142m'   # #f7768e red
   C_TRACK=$'\e[38;2;65;72;104m'    # #414868 track
+  C_FG=$'\e[38;2;192;202;245m'    # #c0caf5 foreground
 else
   C_DIR=$'\e[38;5;110m'
   C_GIT=$'\e[38;5;141m'
@@ -51,6 +52,7 @@ else
   C_MID=$'\e[38;5;222m'
   C_HIGH=$'\e[38;5;203m'
   C_TRACK=$'\e[38;5;237m'
+  C_FG=$'\e[38;5;189m'
 fi
 C_RESET=$'\e[0m'
 C_BOLD=$'\e[1m'
@@ -59,10 +61,12 @@ if [ -n "${CLAUDE_STATUSLINE_ASCII:-}" ] || [ "$TERM" = linux ] || [ "$TERM" = d
   SEP=' | '
   I_DIR='' I_GIT='on ' I_WT='wt ' I_MODEL='' I_CTX='ctx ' I_RATE='rate ' I_TIME=''
   BAR_ON='#' BAR_OFF='-'
+  DOT='  '
 else
   SEP=' ' # powerline thin separator
   I_DIR='󰉋 ' I_GIT='󰘬 ' I_WT='󰙅 ' I_MODEL='󱙺 ' I_CTX='󰾆 ' I_RATE='󰓅 ' I_TIME='󰥔 '
   BAR_ON='━' BAR_OFF='━'
+  DOT=' · '
 fi
 
 # ---------------------------------------------------------------------------
@@ -192,20 +196,20 @@ if [ -n "$rate5" ] || [ -n "$rate7" ]; then
   if [ -n "$rate5" ]; then
     printf -v r '%.0f' "$rate5"
     threshold "$r"
-    seg+="${C_LABEL}5h${C_RESET}${hue}${r}%${C_RESET}"
+    seg+="${C_LABEL}5h ${C_RESET}${hue}${r}%${C_RESET}"
   fi
   if [ -n "$rate7" ]; then
     printf -v r '%.0f' "$rate7"
     threshold "$r"
-    [ -n "$rate5" ] && seg+=" "
-    seg+="${C_LABEL}7d${C_RESET}${hue}${r}%${C_RESET}"
+    [ -n "$rate5" ] && seg+="${C_TRACK}${DOT}${C_RESET}"
+    seg+="${C_LABEL}7d ${C_RESET}${hue}${r}%${C_RESET}"
   fi
   join "$seg"
 fi
 
 if [ -n "$cost" ]; then
   printf -v cost_txt '%.2f' "$cost"
-  [ "$cost_txt" != "0.00" ] && join "${C_LABEL}\$${C_RESET}${C_LOW}${cost_txt}${C_RESET}"
+  [ "$cost_txt" != "0.00" ] && join "${C_LABEL}\$${C_RESET}${C_FG}${cost_txt}${C_RESET}"
 fi
 
 if [ -n "$duration" ]; then

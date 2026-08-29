@@ -11,7 +11,9 @@ the agent reads immediately. Settings are different: `~/.claude/settings.json`
 holds credentials and per-machine config that must never reach a remote, so the
 installer merges in the managed slice named by `config/` and records what it
 touched in a state file, which is what makes a re-run idempotent and an
-uninstall able to put the old values back.
+uninstall able to put the old values back. MCP servers are the exception: they
+live in `~/.claude.json`, the only file Claude Code loads user-scope servers
+from.
 """
 
 import argparse
@@ -30,6 +32,10 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 CLAUDE = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude")
 SETTINGS = CLAUDE / "settings.json"
 STATE = CLAUDE / "agent-kit.state.json"
+# The one managed value settings.json is not read for. `claude mcp add -s user`
+# writes here, and a server defined anywhere else never loads.
+USER_CONFIG = (CLAUDE / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR")
+               else pathlib.Path.home() / ".claude.json")
 TOOLS_LOCAL = REPO / "tools.local.md"
 
 MISSING = object()
@@ -103,6 +109,15 @@ def read_settings() -> dict:
         return {}
     except ValueError as err:
         sys.exit(f"{SETTINGS} is not valid JSON ({err}). Fix it before installing.")
+
+
+def read_user_config() -> dict:
+    try:
+        return json.loads(USER_CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+    except ValueError as err:
+        sys.exit(f"{USER_CONFIG} is not valid JSON ({err}). Fix it before installing.")
 
 
 def get_path(data, path):
@@ -223,11 +238,14 @@ def prune_hooks(settings: dict):
         settings.pop("hooks", None)
 
 
-def merge_mcp(settings: dict, servers: dict):
+def merge_mcp(config: dict, servers: dict):
+    """Into the user config rather than settings.json. Claude Code reads MCP
+    servers from three places, none of them settings.json, so a server merged
+    there is written, reported as installed, and never loaded."""
     record, changes = [], []
     if not servers:
         return record, changes
-    configured = settings.setdefault("mcpServers", {})
+    configured = config.setdefault("mcpServers", {})
     for name, entry in servers.items():
         existing = configured.get(name, MISSING)
         if existing == entry:
@@ -238,6 +256,20 @@ def merge_mcp(settings: dict, servers: dict):
         configured[name] = entry
         changes.append(f"mcp {name}: {entry['command']} {' '.join(entry.get('args', []))}")
     return record, changes
+
+
+def evict_settings_mcp(settings: dict, names) -> list:
+    """Installs before this one merged MCP servers into settings.json, which
+    left an entry that reads as configured and does nothing."""
+    configured = settings.get("mcpServers")
+    if not isinstance(configured, dict):
+        return []
+    stale = [name for name in names if name in configured]
+    for name in stale:
+        configured.pop(name)
+    if not configured:
+        settings.pop("mcpServers", None)
+    return [f"mcp {name}: dropped, settings.json is not read for these" for name in stale]
 
 
 def merge_statusline(settings: dict, status):
@@ -267,6 +299,24 @@ def write_settings(settings: dict, dry_run: bool):
     tmp = SETTINGS.with_suffix(".json.tmp")
     tmp.write_text(body)
     tmp.replace(SETTINGS)
+    return True
+
+
+def write_user_config(config: dict, dry_run: bool):
+    """Claude Code owns this file and rewrites it as it runs, so it is read and
+    written in one pass and left untouched when the merge changed nothing."""
+    body = json.dumps(config, indent=2) + "\n"
+    if USER_CONFIG.exists() and USER_CONFIG.read_text() == body:
+        return False
+    if dry_run:
+        return True
+    backup = USER_CONFIG.with_name(f"{USER_CONFIG.name}.bak-{date.today():%F}")
+    if USER_CONFIG.exists() and not backup.exists():
+        shutil.copy2(USER_CONFIG, backup)
+        print(f"  backup   {short(backup)}")
+    tmp = USER_CONFIG.with_name(f"{USER_CONFIG.name}.tmp")
+    tmp.write_text(body)
+    tmp.replace(USER_CONFIG)
     return True
 
 
@@ -373,13 +423,16 @@ def install(dry_run: bool):
     before_this_run = state()
     prefs_record, prefs_changes = merge_preferences(settings, preferences())
     hooks_record, hooks_changes = merge_hooks(settings, steps["hooks"])
-    mcp_record, mcp_changes = merge_mcp(settings, steps["mcp"])
     status_record, status_changes = merge_statusline(settings, steps["statusLine"])
+    evicted = evict_settings_mcp(settings, steps["mcp"])
+
+    user_config = read_user_config()
+    mcp_record, mcp_changes = merge_mcp(user_config, steps["mcp"])
 
     print(f"\nsettings ({short(SETTINGS)})")
-    for change in prefs_changes + hooks_changes + mcp_changes + status_changes:
+    for change in prefs_changes + hooks_changes + status_changes + evicted:
         print(f"  {change}")
-    if not (prefs_changes or hooks_changes or mcp_changes or status_changes):
+    if not (prefs_changes or hooks_changes or status_changes or evicted):
         print("  already current")
 
     before = SETTINGS.read_text() if SETTINGS.exists() else ""
@@ -389,6 +442,14 @@ def install(dry_run: bool):
         for row in difflib.unified_diff(before.splitlines(), after.splitlines(),
                                         "settings.json", "settings.json (after)", lineterm=""):
             print(f"  {row}")
+
+    if steps["mcp"]:
+        print(f"\nmcp servers ({short(USER_CONFIG)})")
+        for change in mcp_changes:
+            print(f"  {change}")
+        if not mcp_changes:
+            print("  already current")
+        write_user_config(user_config, dry_run)
 
     remembered(before_this_run, hooks_record, prefs_record, mcp_record, status_record)
     if not dry_run:
@@ -449,8 +510,10 @@ def uninstall(dry_run: bool):
         print(f"  {verb} hook {shown}")
     prune_hooks(settings)
 
+    recorded = [entry["name"] for entry in saved.get("mcpServers", [])]
+    user_config = read_user_config()
     for entry in saved.get("mcpServers", []):
-        servers = settings.get("mcpServers", {})
+        servers = user_config.setdefault("mcpServers", {})
         if entry["had"]:
             servers[entry["name"]] = entry["was"]
             print(f"  restore  mcp {entry['name']}")
@@ -458,7 +521,9 @@ def uninstall(dry_run: bool):
             servers.pop(entry["name"], None)
             print(f"  remove   mcp {entry['name']}")
         if not servers:
-            settings.pop("mcpServers", None)
+            user_config.pop("mcpServers", None)
+    write_user_config(user_config, dry_run)
+    evict_settings_mcp(settings, recorded)
 
     status = saved.get("statusLine")
     if status:
@@ -516,11 +581,12 @@ def doctor():
         report("status line", settings.get("statusLine") == steps["statusLine"],
                steps["statusLine"]["command"])
 
+    stray = settings.get("mcpServers", {})
+    loaded = read_user_config().get("mcpServers", {})
     for name in steps["mcp"]:
-        here = name in settings.get("mcpServers", {})
-        report(f"mcp {name}", here, "settings.json")
-        if here and name in user_scoped_mcp():
-            print(f"    also defined in ~/.claude.json: claude mcp remove {name} -s user")
+        report(f"mcp {name}", name in loaded, short(USER_CONFIG))
+        if name in stray:
+            print(f"    stale copy in {short(SETTINGS)}, which is not read for these")
 
     found = subprocess.run([sys.executable, str(REPO / "tools" / "mylint.py"), "--private"],
                            cwd=REPO, capture_output=True, text=True)
@@ -529,14 +595,6 @@ def doctor():
     else:
         counted = [line for line in found.stdout.splitlines() if "private name" in line]
         report("no private names", found.returncode == 0, counted[-1] if counted else "")
-
-
-def user_scoped_mcp() -> set:
-    try:
-        data = json.loads((pathlib.Path.home() / ".claude.json").read_text())
-    except (OSError, ValueError):
-        return set()
-    return set(data.get("mcpServers", {}))
 
 
 def report(label: str, good: bool, detail: str = ""):

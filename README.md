@@ -41,7 +41,7 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 | --- | --- | --- |
 | `careful` | this repo | `PreToolUse` hook on `Bash` |
 | `rtk` | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | `PreToolUse` hook on `Bash`, plus notes in `CLAUDE.md` |
-| `ferridriver` | [salamaashoush/ferridriver](https://github.com/salamaashoush/ferridriver) | MCP server, plus notes in `CLAUDE.md` |
+| `ferridriver` | [salamaashoush/ferridriver](https://github.com/salamaashoush/ferridriver) | MCP server in `~/.claude.json`, plus notes in `CLAUDE.md` |
 | `statusline` | this repo | `statusLine` in `settings.json`, needing `jq` |
 
 Adding one is a block in `config/tools.toml`:
@@ -71,14 +71,18 @@ it.
 ## What the installer will not do
 
 **Clobber something of yours.** A real file where a symlink belongs is renamed
-to `.bak-<date>` first, `settings.json` is copied to `settings.json.bak-<date>`
-before the first edit of the day, and the only symlinks it ever removes are ones
-pointing into this repo. `--dry-run` prints the settings diff without writing.
+to `.bak-<date>` first, `settings.json` and `~/.claude.json` are copied to
+`.bak-<date>` before the first edit of the day, and the only symlinks it ever
+removes are ones pointing into this repo. `--dry-run` prints the settings diff
+without writing.
 
 **Keep a key it does not name.** The merge touches the keys in
 `config/preferences.json`, and the hooks, MCP servers and status line named in
 `config/tools.toml`. Nothing else, so servers and plugins from other work stay
-where they are. A list, `permissions.deny` in practice, is joined rather than
+where they are. An `[x.mcp]` block lands in `~/.claude.json` rather than
+`settings.json`, because that is where Claude Code reads user-scope servers
+from; a run also clears out entries an earlier version of this installer left
+in `settings.json`, where they did nothing. A list, `permissions.deny` in practice, is joined rather than
 replaced.
 
 **Forget what it replaced.** `~/.claude/agent-kit.state.json` holds the previous

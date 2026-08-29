@@ -1,0 +1,13 @@
+{
+  "note": "Copy to ~/.claude/private-names.json and put the real names in that copy. The real ones stay off this repo: writing them here in order to catch them would publish them. Each pattern is a Python regex; keep them specific, since a bare company name also matches the ordinary identifiers that contain it.",
+  "patterns": [
+    { "match": "\\bacme\\.com\\b", "why": "company URL" },
+    { "match": "@acme/[a-z0-9-]+", "why": "company package specifier" },
+    { "match": "\\bACME_[A-Z0-9_]+", "why": "company environment variable" },
+    { "match": "\\bAcme (?:Widgets|Gadgets)\\b", "why": "product name" },
+    { "match": "\\bacme-(?:cli|gateway)\\b", "why": "internal tool" },
+    { "match": "\\b(?:git|ci|wiki)\\.acme\\.net\\b", "why": "internal hostname" },
+    { "match": "\\b[a-z][a-z0-9._-]*@acme\\.com\\b", "why": "company address" }
+  ],
+  "allow": ["acme-corp-example", "acme.com/docs/public"]
+}

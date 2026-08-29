@@ -21,7 +21,8 @@ import re
 import subprocess
 import sys
 
-UNSLOP = pathlib.Path("/Users/sashoush/Workspace/unslop/scripts")
+# The vendored copy, so a fresh clone scans without a second checkout.
+UNSLOP = pathlib.Path(__file__).resolve().parent.parent / "skills" / "unslop" / "scripts"
 
 # Frequency in his corpus is the comment; the count is why the list is this short.
 MISSPELLINGS = {
@@ -182,13 +183,29 @@ def check_private(root, patterns, allow):
                     break
 
 
+WARNED = set()
+
+
+def warn(message: str):
+    if message not in WARNED:
+        WARNED.add(message)
+        print(f"mylint: {message}", file=sys.stderr)
+
+
 def scan(script: str, text: str):
-    out = subprocess.run(
-        ["python3", str(UNSLOP / script)], input=text, capture_output=True, text=True
-    ).stdout
+    """A scanner that cannot run is reported. Silence here once meant a draft
+    came back clean because the scripts were not where this file expected."""
+    path = UNSLOP / script
+    if not path.exists():
+        warn(f"unslop scanners missing at {UNSLOP}, AI-tell checks skipped")
+        return {}
+    done = subprocess.run([sys.executable, str(path)], input=text,
+                          capture_output=True, text=True)
     try:
-        return json.loads(out)
+        return json.loads(done.stdout)
     except ValueError:
+        detail = done.stderr.strip().splitlines()
+        warn(f"{script} returned nothing: {detail[-1] if detail else 'no output'}")
         return {}
 
 

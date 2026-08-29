@@ -19,11 +19,12 @@ rtk gain              # Should work (not "command not found")
 which rtk             # Verify correct binary
 ```
 
-⚠️ **Name collision**: If `rtk gain` fails, you may have reachingforthejack/rtk (Rust Type Kit) installed instead.
+**Name collision**: If `rtk gain` fails, you may have reachingforthejack/rtk (Rust Type Kit) installed instead.
 
 ## Hook-Based Usage
 
 All other commands are automatically rewritten by the Claude Code hook.
-Example: `git status` → `rtk git status` (transparent, 0 tokens overhead)
+Example: `git status` → `rtk git status` (transparent, 0 tokens overhead).
+`install.sh` wires that hook, after `careful`, when `rtk` is on PATH.
 
-Refer to CLAUDE.md for full command reference.
+`rtk --help` lists the rest.

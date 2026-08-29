@@ -1,0 +1,40 @@
+# The optional half of the setup. `install.sh` probes for each binary and wires
+# only what this machine has, so the same clone works where none of them exist.
+#
+# Order matters: Claude Code runs the hooks of one event in the order they appear
+# in settings.json, and the installer writes them in this file's order. `careful`
+# stays first because it has to read the command as typed, before rtk rewrites it.
+
+[careful]
+what = "Warns before rm -rf, DROP TABLE, force-push and other destructive commands."
+skill = "careful"
+
+[[careful.hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "bash {claude}/skills/careful/bin/check-careful.sh"
+# Earlier installs named the clone path rather than the symlink, so a second
+# entry would warn twice. Anything matching this is replaced rather than joined.
+replaces = ["check-careful.sh"]
+
+[rtk]
+what = "Filters and summarises command output before it reaches the context."
+probe = "rtk"
+source = "https://github.com/rtk-ai/rtk"
+doc = "tools/docs/rtk.md"
+
+[[rtk.hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "rtk hook claude"
+
+[ferridriver]
+what = "Drives Chromium, Firefox and WebKit behind one Playwright-shaped API."
+probe = "ferridriver"
+source = "cargo install ferridriver"
+doc = "tools/docs/ferridriver.md"
+
+[ferridriver.mcp]
+type = "stdio"
+command = "ferridriver"
+args = ["mcp"]

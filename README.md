@@ -95,22 +95,51 @@ patterns and the generated `tools.local.md` all stay out of git.
 ## The status line
 
 ```
- ~/Workspace/agent-kit  󰘬 main +2 ~1 ?3  󰙅 fix-login  󱙺 Opus 5  󰾆 ━━━━━━━━━━  37%  󰓅 5h42% 7d18%  $1.23  󰥔 12m
+󰉋 ~/Workspace/agent-kit  󰘬 main +2 ~1 ?3  󰙅 fix-login  󱙺 Opus 5  󰾆 ━━━━━━━━━━  37%  󰆼 4.1M · sub 743K  󰓅 5h 42% · 7d 18%  $4.62 · $1.12/M  󰥔 25m
 ```
 
-Folder, branch with working-tree counts, the worktree when you are in one, model,
-context bar, rate limits, cost and session length. Every segment past the folder
-appears only when it has something to say.
+Folder, branch with working-tree counts, the worktree, model, context bar, tokens,
+rate limits, cost and session length. Every segment past the folder appears only
+when it has something to say, which the worktree takes literally: its name is
+usually also the branch name or the last thing in the path, and it drops out in
+both cases rather than printing a third copy.
 
-It renders on every update, so it is written to fork once. One `jq` call reads
-the whole payload; the branch and the worktree come from reading `.git` and
-`.git/HEAD` directly rather than from `git rev-parse`; the bar, the percentages
-and the durations are `printf -v` and shell arithmetic. Only the working-tree
-counts need a subprocess, and that one sits behind a five-second cache keyed on
-session and directory, with its timestamp inside the file so reading it back
-costs no `stat` either. Measured against the version this replaced, seven
-external commands a render became one, and 80ms became 18ms, of which 11ms is
-bash starting up.
+The context bar is what fits in the window right now; the token count is what the
+session has spent getting there, input, output and both halves of the cache added
+up, with the share a subagent burned broken out beside it once one has run. That
+number is not in the payload the status line is handed, which stops at dollars, so
+it is summed out of the transcript, where a subagent turn is written alongside the
+main thread's. Two things make a naive sum wrong. An assistant entry repeats
+its whole usage object once per content block, so the message id has to carry
+across renders. And a tool input can contain the literal text of a usage field,
+so the numbers come from the last `"usage":{` on the line rather than the first
+match anywhere in it.
+
+`$4.62 · $1.12/M` is the session's cost and what a million tokens came to across
+it. The pair earns its place because the two disagree so wildly. A cache read
+bills at a tenth of the input rate and a one-hour cache write at twice it, so
+almost none of a long session is charged at the headline number, and 4.1M tokens
+for $4.62 reads as an arithmetic error until the rate is next to it. It is also
+the only thing on the line that says whether the cache is working. It sits near a
+fifth of list while the prefix holds and climbs towards list when something
+invalidates it every turn, so it is coloured against the model's own list rate,
+green below a third and red past two thirds. That table is read but never
+printed: the rates it holds are reconciled against a transcript's cost-state,
+which reproduces to the cent, and a model it has never heard of leaves the rate
+uncoloured rather than judging it against the wrong band.
+
+It renders on every update, so it is written to fork twice. One `jq` call reads
+the whole payload and one `awk` reads the transcript. The branch and the worktree
+come from reading `.git` and `.git/HEAD` directly rather than from `git
+rev-parse`, and the bar, the percentages, the durations, the token counts and the
+blended rate are `printf -v` and shell arithmetic. The rate reaches the one float
+it needs through `printf`'s exponent. The working-tree counts sit
+behind a five-second cache keyed on session and directory, with its timestamp
+inside the file so reading it back costs no `stat` either, and the token sum
+behind a running total keyed on session, so a render parses only the lines the
+transcript grew since the last one. Measured against the version this replaced,
+seven external commands a render became one, and 80ms became 18ms, of which 11ms
+is bash starting up. Adding the tokens put a millisecond back.
 
 Colour is Tokyo Night Storm, in truecolor where `COLORTERM` claims it and 256
 otherwise. The glyphs need a Nerd Font; `TERM=linux`, `TERM=dumb` or

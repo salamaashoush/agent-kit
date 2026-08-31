@@ -7,12 +7,16 @@ disable-model-invocation: true
 Write the brief, then launch:
 
 ```
-~/.claude/handover.sh <name> <brief-file>
+~/.claude/handover.sh <name> [brief-file]
 ```
 
-It prints the session id, the worktree the session isolated itself in, and how
-to attach, read and stop it. The work arrives as a branch to merge; the current
-tree and branch are untouched.
+A new terminal window opens on this machine, in this directory, running
+`claude --remote-control <name>`: a session to watch on the screen and answer
+from the Claude app. The brief travels in a file rather than on the command
+line, so quotes and newlines reach it as written.
+
+A session with no brief is fine when you mean to drive it yourself. Everything
+below is for when you do not.
 
 ## The brief is the whole job
 

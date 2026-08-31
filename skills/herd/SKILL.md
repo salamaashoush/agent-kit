@@ -13,6 +13,7 @@ disable-model-invocation: true
 ~/.claude/herd.py land <who>                push it and open a pull request
 ~/.claude/herd.py events                    what the hooks recorded
 ~/.claude/herd.py tidy                      remove the worktrees nobody is in
+~/.claude/herd.py done <who> [note]         close this session, work handed on
 ~/.claude/herd.py tell <who> <text>        send a follow-up
 ~/.claude/herd.py read <who>               the tail of what one said
 ~/.claude/herd.py stop <who>               stop one
@@ -97,6 +98,28 @@ nothing is committed at all. Like `stop`, it prints the plan first and needs
 finished with: nothing uncommitted, and nothing committed that the default
 branch does not already have. Everything else is listed and left alone.
 Branches are never deleted.
+
+## Closing itself, once the work has moved
+
+`herd done <successor> [note]` is how a session that has handed its work on
+closes its own pane. The order that makes it safe:
+
+1. Start the successor and give it the brief.
+2. Wait until it has actually started: `herd watch <successor> --first`, or
+   `read` it.
+3. Commit what is on disk.
+4. `herd done <successor> "what the next reader needs"`, then again with
+   `--yes`.
+
+The note is the part that lasts. Closing the pane ends the conversation that
+knows what was handed over and why, and what survives is one line in
+`~/.herdr/events.jsonl` that `herd events` prints. Write the note for someone
+who has only that line.
+
+Every refusal is the same message, that the work has not moved yet. A successor
+that has said nothing was never prompted. A modified file is something no
+session would be left to explain, so commit it. And the person can always close
+a pane themselves, so a session in any doubt keeps working and says why.
 
 ## Waiting without polling
 

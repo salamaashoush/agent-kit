@@ -6,6 +6,7 @@
     herd verify <who>         run what that repo checks itself with
     herd land <who>           push what it committed and open a pull request
     herd tidy                 remove the worktrees nobody is in
+    herd done <who> [note]    close this session, having handed the work on
     herd start <name> …       start a session, optionally in its own worktree
     herd watch [name …]       block until they stop working, then say what happened
     herd tell <who> <text>    send a follow-up
@@ -249,6 +250,16 @@ def events(after: int = 0) -> tuple:
             except ValueError:
                 continue  # A line still being written is not a broken log.
     return seen, size
+
+
+def record(event: dict) -> None:
+    """Put one event in the log, where it outlives the pane that wrote it."""
+    try:
+        os.makedirs(os.path.dirname(EVENTS), exist_ok=True)
+        with open(EVENTS, "a") as events:
+            events.write(json.dumps({"at": time.time(), **event}) + "\n")
+    except OSError:
+        pass
 
 
 def show_events(args) -> None:
@@ -594,8 +605,8 @@ def plain(text: str) -> str:
     return "\n".join(out)
 
 
-def read(args) -> None:
-    session = resolve(args.who)
+def transcript(session: Session) -> list:
+    """What a session has said, without the interface drawn around it."""
     if session.kind == "bg":
         text = plain(claude("logs", session.id))
     else:
@@ -606,16 +617,20 @@ def read(args) -> None:
             text = payload.get("output") or payload.get("text") or text
         except (ValueError, KeyError, TypeError):
             pass
-    # The pane holds the agent's words and the interface drawn around them.
-    # On a phone the chrome is most of the screen, so it goes.
+    # The pane holds the agent's words and the chrome around them. On a phone
+    # the chrome is most of the screen, so it goes.
     chrome = ("─", "╭", "╰", "│", "❯", "⏵", "\ue0b0", "\uf07b", "\uf1d3")
-    lines = [
+    return [
         line
         for line in text.splitlines()
         if line.strip() and not line.lstrip().startswith(chrome)
     ]
+
+
+def read(args) -> None:
+    session = resolve(args.who)
     print(f"{session.line()}\n")
-    print("\n".join(lines[-args.lines :]))
+    print("\n".join(transcript(session)[-args.lines :]))
 
 
 def stop(args) -> None:
@@ -632,6 +647,59 @@ def stop(args) -> None:
     else:
         herdr("pane", "close", session.pane)
     print(f"stopped {session.label}")
+
+
+def done(args) -> None:
+    """Close this session, once the work has demonstrably moved to another one.
+
+    A session's own conversation is the only record of what it handed over and
+    why, and closing the pane ends it. So the work has to be somewhere else
+    first: a successor that is running and has already spoken, no modified file
+    left behind unexplained, and the handover written to the event log, which
+    outlives the pane."""
+    mine = os.environ.get("HERDR_PANE_ID")
+    if not mine:
+        raise SystemExit("not running in a Herdr pane, so there is nothing to close")
+
+    # resolve() never returns the caller, so this cannot name itself.
+    successor = resolve(args.to)
+    if not transcript(successor):
+        raise SystemExit(
+            f"{successor.label} has not said anything yet, so the work has not moved.\n"
+            f"  herd tell {successor.label} '…'   and wait for it to start"
+        )
+
+    here = os.getcwd()
+    try:
+        changed = [line for line in git(here, "status", "--porcelain").splitlines()
+                   if not line.startswith("??")]
+    except SystemExit:
+        changed = []  # Not a checkout, so there is nothing to have left behind.
+    if changed:
+        raise SystemExit(
+            "these are modified and nothing would be left to explain them:\n"
+            + "\n".join("  " + line for line in changed)
+            + "\ncommit them first."
+        )
+
+    handover = {
+        "hook_event_name": "Handover",
+        "to": successor.label,
+        "cwd": here,
+        "pane": mine,
+        "message": args.note or "",
+    }
+    if not args.yes:
+        print(f"would hand over to {successor.label} and close this pane:")
+        print("  " + successor.line())
+        if args.note:
+            print(f"  note: {args.note}")
+        print("\nrun again with --yes.")
+        return
+
+    record(handover)
+    print(f"handed over to {successor.label}, closing this pane")
+    herdr("pane", "close", mine)
 
 
 def main() -> int:
@@ -672,6 +740,12 @@ def main() -> int:
     checking.add_argument("command", nargs="*", help="the command, if the repo does not say")
     checking.add_argument("--lines", type=int, default=25)
     checking.set_defaults(run=verify)
+
+    finished = sub.add_parser("done", help="close this session, having handed the work on")
+    finished.add_argument("to", help="the session the work moved to")
+    finished.add_argument("note", nargs="?", help="what the next person should know")
+    finished.add_argument("--yes", "-y", action="store_true")
+    finished.set_defaults(run=done)
 
     recorded = sub.add_parser("events", help="what the hooks recorded")
     recorded.add_argument("--lines", type=int, default=20)

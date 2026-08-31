@@ -70,7 +70,8 @@ def plan() -> dict:
     """Everything this machine should end up with, tools it lacks excluded."""
     links = [(REPO / "CLAUDE.md", CLAUDE / "CLAUDE.md"),
              (REPO / "tools" / "mylint.py", CLAUDE / "mylint.py"),
-             (REPO / "tools" / "herd.py", CLAUDE / "herd.py")]
+             (REPO / "tools" / "herd.py", CLAUDE / "herd.py"),
+             (REPO / "tools" / "herd-event.py", CLAUDE / "herd-event.py")]
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CLAUDE / "skills" / skill.name))
 
@@ -83,9 +84,10 @@ def plan() -> dict:
         for hook in tool.get("hooks", []):
             hooks.append({
                 "event": hook["event"],
-                "matcher": hook["matcher"],
+                "matcher": hook.get("matcher"),
                 "command": hook["command"].format(claude=shlex.quote(str(CLAUDE))),
                 "replaces": hook.get("replaces", []),
+                "async": hook.get("async", False),
                 "tool": name,
             })
         if "mcp" in tool:
@@ -192,6 +194,12 @@ def merge_hooks(settings: dict, hooks: list):
     """Managed hooks run first, in the order `config/tools.toml` lists them. The
     entry a managed hook displaces is remembered whole, so an uninstall puts back
     what was there rather than leaving a gap."""
+    def written(hook: dict) -> dict:
+        entry = {"type": "command", "command": hook["command"]}
+        if hook["async"]:
+            entry["async"] = True
+        return entry
+
     record, changes = [], []
     groups = {}
     for hook in hooks:
@@ -201,8 +209,11 @@ def merge_hooks(settings: dict, hooks: list):
         listeners = settings.setdefault("hooks", {}).setdefault(event, [])
         group = next((g for g in listeners if g.get("matcher") == matcher), None)
         if group is None:
-            group = {"matcher": matcher, "hooks": []}
+            # Notification and Stop carry no matcher, and a group holding one
+            # they cannot match would never fire.
+            group = {"hooks": []} if matcher is None else {"matcher": matcher, "hooks": []}
             listeners.append(group)
+        where = f"{event}/{matcher}" if matcher else event
         entries = group.setdefault("hooks", [])
         before = list(entries)
 
@@ -220,12 +231,12 @@ def merge_hooks(settings: dict, hooks: list):
             record.append({"event": event, "matcher": matcher, "command": hook["command"],
                            "had": prior is not None, "was": prior, "index": index})
             if prior is not None and prior.get("command") != hook["command"]:
-                changes.append(f"{event}/{matcher}: replaced {prior.get('command')}")
+                changes.append(f"{where}: replaced {prior.get('command')}")
 
         entries[:] = [entry for entry in before if entry not in displaced]
-        entries[:0] = [{"type": "command", "command": hook["command"]} for hook in wanted]
+        entries[:0] = [written(hook) for hook in wanted]
         if entries != before:
-            changes += [f"{event}/{matcher}: {hook['command']}  [{hook['tool']}]" for hook in wanted]
+            changes += [f"{where}: {hook['command']}  [{hook['tool']}]" for hook in wanted]
     return record, changes
 
 

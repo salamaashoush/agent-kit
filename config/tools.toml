@@ -46,3 +46,21 @@ source = "jq: brew install jq, or pacman -S jq"
 # The script is symlinked next to the settings that name it, so the path in
 # settings.json survives this clone moving. A Nerd Font renders the glyphs.
 statusline = "tools/statusline.sh"
+
+[herd]
+what = "Runs the other Claude sessions on this machine, from a phone."
+skill = "herd"
+
+# Notification fires the moment a session blocks on a question or a permission
+# prompt, and Stop when it finishes a turn. Recorded, `herd watch` hears about a
+# session that stopped instead of finding it on some later poll, and a session
+# with no pane can be waited on at all.
+[[herd.hooks]]
+event = "Notification"
+command = "python3 {claude}/herd-event.py"
+async = true
+
+[[herd.hooks]]
+event = "Stop"
+command = "python3 {claude}/herd-event.py"
+async = true

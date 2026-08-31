@@ -70,7 +70,8 @@ def plan() -> dict:
     """Everything this machine should end up with, tools it lacks excluded."""
     links = [(REPO / "CLAUDE.md", CLAUDE / "CLAUDE.md"),
              (REPO / "tools" / "mylint.py", CLAUDE / "mylint.py"),
-             (REPO / "tools" / "handover.sh", CLAUDE / "handover.sh")]
+             (REPO / "tools" / "handover.sh", CLAUDE / "handover.sh"),
+             (REPO / "tools" / "handover-stop.py", CLAUDE / "handover-stop.py")]
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CLAUDE / "skills" / skill.name))
 

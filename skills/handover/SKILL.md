@@ -23,6 +23,20 @@ herdr agent focus <name>    bring the tab up
 The name is Herdr's agent name as well as the Remote Control one, so it is
 lowercase, starts with a letter, and stops at 32 characters.
 
+## Stopping one
+
+```
+~/.claude/handover-stop.py                 what is running
+~/.claude/handover-stop.py <query>         what it would stop
+~/.claude/handover-stop.py <query> --yes   stop it
+```
+
+The query is whatever the person said: a name, part of one, a misspelling, a
+directory, or a few words of what the session is working on. Hand it across
+unchanged rather than guessing which session was meant. It stops only when
+exactly one thing matches and never the session calling it, so an ambiguous
+query comes back as a list to choose from, which is the answer to pass on.
+
 A session with no brief is fine when you mean to drive it yourself. Everything
 below is for when you do not.
 

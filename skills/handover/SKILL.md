@@ -10,10 +10,18 @@ Write the brief, then launch:
 ~/.claude/handover.sh <name> [brief-file]
 ```
 
-A new terminal window opens on this machine, in this directory, running
-`claude --remote-control <name>`: a session to watch on the screen and answer
-from the Claude app. The brief travels in a file rather than on the command
-line, so quotes and newlines reach it as written.
+A new Herdr tab opens beside this one, in this directory, running Claude Code
+with Remote Control on: a session to watch here and answer from the app. The
+brief travels in a file rather than on the command line, so quotes and newlines
+reach it as written.
+
+```
+herdr agent read <name>     what it has said
+herdr agent focus <name>    bring the tab up
+```
+
+The name is Herdr's agent name as well as the Remote Control one, so it is
+lowercase, starts with a letter, and stops at 32 characters.
 
 A session with no brief is fine when you mean to drive it yourself. Everything
 below is for when you do not.

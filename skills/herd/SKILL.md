@@ -6,8 +6,13 @@ disable-model-invocation: true
 
 ```
 ~/.claude/herd.py                          what is running
+~/.claude/herd.py on <repo> [brief]        start work on a repo
 ~/.claude/herd.py start <name> [brief]     start one
 ~/.claude/herd.py watch [name …]           block until they stop working
+~/.claude/herd.py verify <who>              run what that repo checks itself with
+~/.claude/herd.py land <who>                push it and open a pull request
+~/.claude/herd.py events                    what the hooks recorded
+~/.claude/herd.py tidy                      remove the worktrees nobody is in
 ~/.claude/herd.py tell <who> <text>        send a follow-up
 ~/.claude/herd.py read <who>               the tail of what one said
 ~/.claude/herd.py stop <who>               stop one
@@ -32,6 +37,88 @@ the answer.
 
 `--worktree` is not optional when two sessions share a repo. Without it they
 edit the same files, build over each other, and commit each other's work.
+
+## A background session is a session too
+
+`claude --bg` starts a session with no pane, so herdr never lists it and an
+earlier version of this tool could not see it at all. Someone asking why their
+session is missing from the listing has usually found one of these. The listing
+now merges both sources, herdr's panes and `claude agents --json`, and tags the
+background ones `bg`.
+
+The CLI is what limits them, not this tool:
+
+- `read` works on both. `claude logs` replays a screen rather than a
+  transcript, so the cursor moves are played back into words first.
+- `stop` works on both. A background session keeps its conversation, so
+  `claude attach <id>` picks it up again afterwards.
+- `tell` does not reach one. Nothing prompts a background session from
+  outside; attach to it instead.
+- `watch` cannot block on one, because there is no pane for herdr to wait on.
+  It is listed with its status and skipped.
+
+## Starting on a repo that may not be here yet
+
+`herd on <repo>` is the phone-sized form: find the repo, get a checkout, start
+a session in it, all from one word.
+
+- Already at `~/Workspace/<repo>`: it fetches, and leaves that checkout alone.
+- Not there: `gh` looks for the name under your own account first, then each
+  organisation you belong to, and clones the one match into `~/Workspace`. Two
+  matches refuse and print both, the rule `who` already follows.
+- Either way the session works in a worktree of its own off `origin/HEAD`, at
+  `~/.herdr/worktrees/<repo>/<name>` on a branch `work/<name>`. Nothing pulls,
+  resets or checks out over your own checkout, so whatever is uncommitted in it
+  is still there afterwards.
+
+The session takes the repo's name unless `--name` says otherwise, and that name
+is what every other command answers to. `herd start <name> --repo <repo>` is the
+same thing when the session should not be called after the repo.
+
+## Finishing, rather than stopping
+
+Three commands exist because a session that has stopped is not a session that
+has delivered.
+
+`verify` runs what the repo checks itself with, looked for in this order: a
+`justfile` carrying a `ready` recipe, then a `ready`, `verify`, `ci`, `check`
+or `test` script in `package.json` through whichever runner the nearest
+lockfile implies, then `cargo test`. Pass the command yourself when the repo
+says nothing. The exit code is the verdict, never a grep over the output, and a
+failure prints its own tail.
+
+`land` pushes what a session committed and opens a pull request from its
+branch. It refuses while a file is uncommitted, because a push carries commits
+and would leave the rest in a checkout nobody opens again, and it refuses when
+nothing is committed at all. Like `stop`, it prints the plan first and needs
+`--yes`.
+
+`tidy` removes worktrees no session is in, and only ones it can prove are
+finished with: nothing uncommitted, and nothing committed that the default
+branch does not already have. Everything else is listed and left alone.
+Branches are never deleted.
+
+## Waiting without polling
+
+`watch` waits on every session at once. One after another meant the first slow
+one hid every later one that had already stopped, so the whole answer arrived
+when the slowest did. `--first` returns as soon as any one of them stops.
+
+A background session has no pane to wait on, so it is watched through what its
+hooks record instead. Two user-level hooks in `~/.claude/settings.json` write
+one JSON line per event to `~/.herdr/events.jsonl`:
+
+```json
+"Notification": [{"hooks": [{"type": "command",
+  "command": "python3 ~/Workspace/agent-kit/tools/herd-event.py", "async": true}]}],
+"Stop": [{"hooks": [{"type": "command",
+  "command": "python3 ~/Workspace/agent-kit/tools/herd-event.py", "async": true}]}]
+```
+
+`Notification` fires the moment a session blocks on a question or a permission
+prompt, so `watch` hears it rather than finding it on some later poll. `herd
+events` is the tail of that file. Nothing breaks without the hooks: every
+command falls back to waiting.
 
 ## The brief is the whole job
 

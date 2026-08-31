@@ -67,10 +67,16 @@ a session in it, all from one word.
 - Not there: `gh` looks for the name under your own account first, then each
   organisation you belong to, and clones the one match into `~/Workspace`. Two
   matches refuse and print both, the rule `who` already follows.
-- Either way the session works in a worktree of its own off `origin/HEAD`, at
-  `~/.herdr/worktrees/<repo>/<name>` on a branch `work/<name>`. Nothing pulls,
-  resets or checks out over your own checkout, so whatever is uncommitted in it
-  is still there afterwards.
+- Either way the session works in a worktree of its own at
+  `~/.herdr/worktrees/<repo>/<name>`, on a branch `work/<name>` **cut from
+  wherever that checkout currently is**, not from the remote's default branch.
+  A successor cut from a stale main starts without the work that produced it.
+  Nothing pulls, resets or checks out over your own checkout.
+
+A worktree carries commits and nothing else, so an uncommitted file would not
+travel. Rather than start a successor from a state its predecessor cannot see,
+this refuses and names the files: commit them, and the successor inherits them
+with the branch.
 
 The session takes the repo's name unless `--name` says otherwise, and that name
 is what every other command answers to. `herd start <name> --repo <repo>` is the
@@ -105,11 +111,13 @@ Branches are never deleted.
 closes its own pane. The order that makes it safe:
 
 1. Start the successor and give it the brief.
-2. Wait until it has actually started: `herd watch <successor> --first`, or
-   `read` it.
-3. Commit what is on disk.
-4. `herd done <successor> "what the next reader needs"`, then again with
-   `--yes`.
+2. Commit what is on disk.
+3. `herd done <successor> --yes "what the next reader needs"`.
+
+Hand over while the successor is working, because a session that is working is
+a session that took the brief. `done` makes that check itself and says so when
+it fails, so the handover happens at the moment the work moves rather than when
+it finishes.
 
 The note is the part that lasts. Closing the pane ends the conversation that
 knows what was handed over and why, and what survives is one line in

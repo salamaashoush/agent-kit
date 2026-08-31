@@ -125,15 +125,30 @@ def checkout(repo: str) -> str:
 
 
 def worktree(where: str, name: str) -> str:
-    """A checkout of its own, off whatever the remote calls its default branch.
+    """A checkout of its own, cut from where this one actually is.
 
-    Never the shared one. It may be dirty, and what is uncommitted there is
-    work this tool did not create and must not touch, so nothing here pulls,
-    resets or checks anything out over it."""
-    base = base_of(where)
+    Not from the remote's default branch. A session hands over from the branch
+    it is on, and a worktree cut from a stale main starts the successor without
+    the work that produced it.
+
+    A worktree carries commits and nothing else, so an uncommitted file would
+    not travel. Rather than start the successor from a state its predecessor
+    cannot see, this refuses and names the files."""
     path = os.path.join(WORKTREES, os.path.basename(where), name)
     if os.path.isdir(path):
         return path
+
+    changed = [line for line in git(where, "status", "--porcelain").splitlines()
+               if not line.startswith("??")]
+    if changed:
+        raise SystemExit(
+            f"a worktree carries commits, so these would not reach {name}:\n"
+            + "\n".join("  " + line for line in changed)
+            + "\ncommit them first."
+        )
+    # The commit rather than the branch name, because a branch already checked
+    # out here cannot be checked out again in the new worktree.
+    base = git(where, "rev-parse", "HEAD")
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
     branch = f"work/{name}"

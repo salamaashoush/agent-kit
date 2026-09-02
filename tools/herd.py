@@ -124,7 +124,7 @@ def checkout(repo: str) -> str:
     return where
 
 
-def worktree(where: str, name: str) -> str:
+def worktree(where: str, name: str, branch: str = "") -> str:
     """A checkout of its own, cut from where this one actually is.
 
     Not from the remote's default branch. A session hands over from the branch
@@ -151,7 +151,7 @@ def worktree(where: str, name: str) -> str:
     base = git(where, "rev-parse", "HEAD")
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    branch = f"work/{name}"
+    branch = branch or f"work/{name}"
     known = git(where, "branch", "--list", branch)
     git(where, "worktree", "add", path, *([branch] if known else ["-b", branch, base]))
     return path
@@ -344,17 +344,39 @@ def start(args) -> None:
     if any(s.name == args.name for s in sessions()):
         raise SystemExit(f'"{args.name}" is already running')
 
+    # `--worktree` takes an optional branch, so `--worktree brief.md` binds the
+    # brief to it and the session starts with nothing to do. It printed "give
+    # it something to do" and looked like a session that had simply not been
+    # told, which is a whole handover lost quietly.
+    #
+    # Neither of the two shapes below is a branch anybody meant, so each is
+    # refused with the line that would have worked. `--branch` is the spelling
+    # with no ambiguity in it and is what a script should use.
+    if isinstance(args.worktree, str):
+        if not args.brief and os.path.isfile(os.path.expanduser(args.worktree)):
+            raise SystemExit(
+                f"--worktree took `{args.worktree}` as a branch name and it is a file.\n"
+                f"the brief goes after the name:\n"
+                f"  herd start {args.name} {args.worktree} --worktree")
+        if args.repo:
+            raise SystemExit(
+                f"--repo makes the worktree itself, so --worktree {args.worktree} "
+                f"would be ignored.\nuse --branch to name the branch, or drop it.")
+    if getattr(args, "branch", None):
+        args.worktree = args.branch
+
     brief = ""
     if args.brief:
         try:
-            brief = open(args.brief).read()
+            brief = open(os.path.expanduser(args.brief)).read()
         except OSError as problem:
             raise SystemExit(str(problem))
         if not brief.strip():
             raise SystemExit("the brief is empty")
 
     if args.repo:
-        where = worktree(checkout(args.repo), args.name)
+        where = worktree(checkout(args.repo), args.name,
+                         getattr(args, "branch", None))
     else:
         where = os.path.abspath(args.cwd or os.getcwd())
     if args.worktree and not args.repo:
@@ -726,6 +748,9 @@ def main() -> int:
     begin.add_argument("brief", nargs="?", help="a file holding what it should do")
     begin.add_argument("--worktree", nargs="?", const=True, metavar="BRANCH",
                        help="give it a git worktree of its own")
+    # The unambiguous spelling of the same thing. `--worktree`'s optional value
+    # swallows the brief that follows it, which is a mistake with no symptom.
+    begin.add_argument("--branch", help="what to call its branch")
     begin.add_argument("--cwd")
     begin.add_argument("--repo", help="a repo under ~/Workspace, cloned from your account if absent")
     begin.set_defaults(run=start)
@@ -734,9 +759,10 @@ def main() -> int:
     onto.add_argument("repo")
     onto.add_argument("brief", nargs="?", help="a file holding what it should do")
     onto.add_argument("--name", help="what to call the session (default: the repo)")
+    onto.add_argument("--branch", help="what to call its branch")
     onto.set_defaults(run=lambda a: start(argparse.Namespace(
         name=a.name or "".join(c if c in NAME else "-" for c in os.path.basename(a.repo).lower()),
-        brief=a.brief, worktree=False, cwd=None, repo=a.repo,
+        brief=a.brief, worktree=False, branch=a.branch, cwd=None, repo=a.repo,
     )))
 
     waiting = sub.add_parser("watch", help="block until they stop working")

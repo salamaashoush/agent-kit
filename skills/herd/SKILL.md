@@ -7,7 +7,7 @@ disable-model-invocation: true
 ```
 ~/.claude/herd.py                          what is running
 ~/.claude/herd.py on <repo> [brief]        start work on a repo
-~/.claude/herd.py start <name> [brief]     start one
+~/.claude/herd.py start <name> [brief]     start one; brief is a FILE, after the name
 ~/.claude/herd.py watch [name …]           block until they stop working
 ~/.claude/herd.py verify <who>              run what that repo checks itself with
 ~/.claude/herd.py land <who>                push it and open a pull request
@@ -38,6 +38,20 @@ the answer.
 
 `--worktree` is not optional when two sessions share a repo. Without it they
 edit the same files, build over each other, and commit each other's work.
+
+**The brief is a file and it goes after the name.** `--worktree` takes an
+optional branch, so `herd start x --worktree brief.md` reads the brief as a
+branch name and starts a session with nothing to do; it prints "give it
+something to do" and looks like one that was simply never told. Both shapes
+that cannot have been meant are refused now, with the line that would have
+worked, and `--branch` is the spelling with no ambiguity in it:
+
+    herd start modules brief.md --repo tsllvm      # the brief, after the name
+    herd start modules brief.md --worktree         # a worktree, default branch
+    herd start modules brief.md --branch work/x    # and a branch of your own
+
+`--repo` makes the worktree itself, so `--worktree` beside it is refused rather
+than ignored. Use `--branch` there.
 
 ## A background session is a session too
 

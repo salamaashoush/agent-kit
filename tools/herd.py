@@ -66,9 +66,30 @@ def gh(*command: str, where: str = None) -> str:
 
 
 def base_of(where: str) -> str:
-    """What the remote calls its default branch, as origin/<name>."""
+    """What the remote calls its default branch, as origin/<name>.
+
+    `land` wants this one, opening its pull request against the remote."""
     head = git(where, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
     return (head or "refs/remotes/origin/main").replace("refs/remotes/", "")
+
+
+def landed_in(where: str) -> str:
+    """Where a finished worktree's commits have to be for it to be finished.
+
+    The local default branch where there is one, and the remote's otherwise.
+    `tidy` asked for `origin/main` and every brief here says not to push, so a
+    session that landed by fast-forwarding a local `main` stayed "unmerged" for
+    ever and nothing was ever tidyable.
+
+    Removing on the local test loses no commit: a worktree carries none of its
+    own, and `tidy` never deletes a branch."""
+    remote = base_of(where)
+    local = remote.rsplit("/", 1)[-1]
+    try:
+        git(where, "rev-parse", "--verify", f"refs/heads/{local}")
+        return local
+    except SystemExit:
+        return remote
 
 
 def owners() -> list:
@@ -561,7 +582,10 @@ def tidy(args) -> None:
 
     Removes only what it can prove is finished with: nothing uncommitted, and
     nothing committed that the default branch does not already have. Anything
-    else is someone's work and is listed rather than touched."""
+    else is someone's work and is listed rather than touched.
+
+    The default branch is the **local** one where there is one; see
+    `landed_in` for why the remote's was the wrong question."""
     busy = {s.cwd for s in sessions()}
     spent, held = [], []
     for repo in sorted(os.listdir(WORKTREES)) if os.path.isdir(WORKTREES) else []:
@@ -571,7 +595,7 @@ def tidy(args) -> None:
                 continue
             try:
                 keeping = git(path, "status", "--porcelain").splitlines()
-                keeping += git(path, "log", "--oneline", f"{base_of(path)}..HEAD").splitlines()
+                keeping += git(path, "log", "--oneline", f"{landed_in(path)}..HEAD").splitlines()
             except SystemExit:
                 continue  # Not a worktree of ours, so not ours to remove.
             (held if keeping else spent).append((path, keeping))

@@ -1,9 +1,14 @@
 # The optional half of the setup. `install.sh` probes for each binary and wires
 # only what this machine has, so the same clone works where none of them exist.
 #
-# Order matters: Claude Code runs the hooks of one event in the order they appear
-# in settings.json, and the installer writes them in this file's order. `careful`
+# Order matters: a host runs the hooks of one event in the order they appear in
+# its own config, and the installer writes them in this file's order. `careful`
 # stays first because it has to read the command as typed, before rtk rewrites it.
+#
+# `{home}` is the host's own config directory, `~/.claude` or `~/.codex`, so a
+# hook command names the copy belonging to the host running it. A hook goes to
+# both hosts under the same event name; `codex_event` renames it for Codex and
+# `codex = false` withholds it, which is what an event only one host has needs.
 
 [careful]
 what = "Warns before rm -rf, DROP TABLE, force-push and other destructive commands."
@@ -12,7 +17,7 @@ skill = "careful"
 [[careful.hooks]]
 event = "PreToolUse"
 matcher = "Bash"
-command = "bash {claude}/skills/careful/bin/check-careful.sh"
+command = "bash {home}/skills/careful/bin/check-careful.sh"
 # Earlier installs named the clone path rather than the symlink, so a second
 # entry would warn twice. Anything matching this is replaced rather than joined.
 replaces = ["check-careful.sh"]
@@ -23,6 +28,9 @@ probe = "rtk"
 source = "https://github.com/rtk-ai/rtk"
 doc = "tools/docs/rtk.md"
 
+# `claude` names the payload shape rather than the host. Codex serialises the
+# same `tool_name` and `tool_input.command`, so the one processor reads both;
+# `rtk hook` grows a `codex` of its own the day the two stop agreeing.
 [[rtk.hooks]]
 event = "PreToolUse"
 matcher = "Bash"
@@ -45,6 +53,9 @@ probe = "jq"
 source = "jq: brew install jq, or pacman -S jq"
 # The script is symlinked next to the settings that name it, so the path in
 # settings.json survives this clone moving. A Nerd Font renders the glyphs.
+#
+# Claude Code only. Codex's status line is a list of segments it renders itself
+# rather than a script it runs, so there is nothing here for it to wire.
 statusline = "tools/statusline.sh"
 
 [herd]
@@ -55,12 +66,16 @@ skill = "herd"
 # prompt, and Stop when it finishes a turn. Recorded, `herd watch` hears about a
 # session that stopped instead of finding it on some later poll, and a session
 # with no pane can be waited on at all.
+#
+# Codex has no Notification. `PermissionRequest` is the half of it that matters
+# here, being the one that fires while a session sits waiting for an answer.
 [[herd.hooks]]
 event = "Notification"
-command = "python3 {claude}/herd-event.py"
+codex_event = "PermissionRequest"
+command = "python3 {home}/herd-event.py"
 async = true
 
 [[herd.hooks]]
 event = "Stop"
-command = "python3 {claude}/herd-event.py"
+command = "python3 {home}/herd-event.py"
 async = true

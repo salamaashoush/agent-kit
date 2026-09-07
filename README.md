@@ -1,8 +1,12 @@
 # agent-kit
 
 My coding-agent setup, versioned: the global instructions every project loads,
-the Claude Code preferences and hooks behind them, the tools that get wired in
-where a machine has them, and the skills I want to keep editing.
+the preferences and hooks behind them, the tools that get wired in where a
+machine has them, and the skills I want to keep editing.
+
+Two hosts read it, Claude Code and Codex, off one `config/` rather than a
+parallel one. A skill is the same `SKILL.md` for both and a hook is the same
+schema, so what differs is only where each lands and which events exist.
 
 Instructions and skills install by symlink, so editing a file here changes what
 the agent reads immediately, and `git pull` on another machine is the whole
@@ -24,15 +28,15 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 
 | Path | Installs to | What it is |
 | --- | --- | --- |
-| `CLAUDE.md` | `~/.claude/CLAUDE.md` | Global instructions, loaded on every turn of every project |
+| `CLAUDE.md` | `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` | Global instructions, loaded on every turn of every project |
 | `config/preferences.json` | merged into `~/.claude/settings.json` | The settings this repo owns |
-| `config/tools.toml` | hooks and MCP servers in the same file | Every optional tool, and how each is wired |
+| `config/tools.toml` | hooks and MCP servers for both hosts | Every optional tool, and how each is wired |
 | `config/private-names.example.json` | copied by hand to `~/.claude/private-names.json` | The shape of the `--private` list, never the list |
 | `tools/docs/*.md` | `tools.local.md`, which `CLAUDE.md` imports | Notes on a tool, loaded only where that tool exists |
 | `tools/mylint.py` | `~/.claude/mylint.py` | Checks a draft, a commit message, or a PR body |
 | `tools/statusline.sh` | `~/.claude/statusline.sh`, named by `statusLine` | The status line, wired only where `jq` exists |
 | `tools/install.py` | stays here | The installer `install.sh` runs |
-| `skills/*` | `~/.claude/skills/*` | See the attribution table |
+| `skills/*` | `~/.claude/skills/*` and `~/.codex/skills/*` | See the attribution table |
 | `vendor-licenses/` | stays here | Licences of the vendored skills |
 
 ## Tools
@@ -68,6 +72,56 @@ none of these. Hook order inside one event follows this file, which is why
 `careful` sits first: it has to read the command as typed, before rtk rewrites
 it.
 
+`{home}` in a hook command is the host's own config directory, so each host
+runs the copy belonging to it and uninstalling one takes nothing of the other's
+with it. A hook goes to both hosts under the same event name, and two keys say
+otherwise: `codex_event` renames it, which is what `herd`'s `Notification` needs
+because Codex has no such event and `PermissionRequest` is the half that
+matters; `codex = false` withholds it entirely.
+
+## Codex
+
+Codex is wired where `codex` is on `PATH`, off the same `config/`, and
+`--doctor` reports it beside Claude's half. What lands where:
+
+| | Claude Code | Codex |
+| --- | --- | --- |
+| Instructions | `~/.claude/CLAUDE.md` | `~/.codex/AGENTS.md` |
+| Skills | `~/.claude/skills/*` | `~/.codex/skills/*` |
+| Hooks | `settings.json` | `~/.codex/hooks.json`, plus `features.hooks` |
+| MCP servers | `~/.claude.json` | `config.toml`, written by `codex mcp add` |
+| Status line | `statusLine` | nothing, see below |
+
+Both instruction files are symlinks to the one `CLAUDE.md`, so an edit is live
+for both. The cost is `@tools.local.md`: Claude expands that import and Codex
+does not, so Codex reads the line verbatim and never gets the rtk and
+ferridriver notes behind it. Everything above that line, which is all of the
+instructions proper, it gets.
+
+**`config.toml` is Codex's own file** and this installer never rewrites it. It
+holds the trust hash of every hook and the trust level of every project, in a
+format there is no writer for here, so both changes to it go through the CLI
+that owns them: `codex mcp add` and `codex features enable hooks`. State is read
+back with `tomllib`, which is what keeps a second run a no-op.
+
+**Codex asks before it runs a hook**, once each, and records the hash it
+approved in `config.toml`. The installer does not forge those: a trust prompt
+answered by the thing being trusted is not a trust prompt. Approve them on the
+first session after installing.
+
+**Two things do not port.** Codex's status line is a list of segments it renders
+itself rather than a script it runs, so `tools/statusline.sh` stays Claude's.
+And `codex features disable hooks` writes `hooks = false` rather than removing
+the key, so an uninstall on a machine that never had the key leaves that one
+line behind. Everything else round-trips: against a Codex home already carrying
+a hook and a project trust level of its own, install then uninstall returned
+`config.toml` byte for byte and `hooks.json` to its prior content, gaining only
+the trailing newline every file this installer writes ends with.
+
+A symlink someone else put in `~/.codex/skills` is left alone, the way one in
+`~/.claude/skills` is. Omarchy's `diagnose-crash` and `omarchy` sit beside these
+nine here and neither install nor uninstall touches them.
+
 ## What the installer will not do
 
 **Clobber something of yours.** A real file where a symlink belongs is renamed
@@ -86,8 +140,10 @@ in `settings.json`, where they did nothing. A list, `permissions.deny` in practi
 replaced.
 
 **Forget what it replaced.** `~/.claude/agent-kit.state.json` holds the previous
-value of every key, hook and server it changed, and `--uninstall` reads that
-back. A round trip on this machine's settings returns the file byte for byte.
+value of every key, hook and server it changed on either host, and `--uninstall`
+reads that back. A round trip on this machine's settings returns the file byte
+for byte. One state file rather than one per host, so one `--uninstall` undoes
+both and neither can be left half wired.
 
 **Version anything private.** Credentials, work config, the `--private`
 patterns and the generated `tools.local.md` all stay out of git.

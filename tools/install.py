@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install this repo into ~/.claude.
+"""Install this repo into ~/.claude, and into ~/.codex where Codex is present.
 
     ./install.sh              symlink, merge settings, wire the tools present
     ./install.sh --dry-run    print the diff, change nothing
@@ -14,6 +14,10 @@ touched in a state file, which is what makes a re-run idempotent and an
 uninstall able to put the old values back. MCP servers are the exception: they
 live in `~/.claude.json`, the only file Claude Code loads user-scope servers
 from.
+
+Codex is the second host and is wired off the same `config/` rather than a
+parallel one, because a skill is the same `SKILL.md` for both and a hook is the
+same schema. The state file records both, so one `--uninstall` undoes both.
 """
 
 import argparse
@@ -37,6 +41,16 @@ STATE = CLAUDE / "agent-kit.state.json"
 USER_CONFIG = (CLAUDE / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR")
                else pathlib.Path.home() / ".claude.json")
 TOOLS_LOCAL = REPO / "tools.local.md"
+
+CODEX = pathlib.Path(os.environ.get("CODEX_HOME") or pathlib.Path.home() / ".codex")
+CODEX_HOOKS = CODEX / "hooks.json"
+CODEX_CONFIG = CODEX / "config.toml"
+# Every event Codex's HookEventsToml names. An event it has never heard of
+# deserialises into nothing, so a hook written under one is a file that parses
+# and a hook that never fires; the installer refuses the name instead.
+CODEX_EVENTS = {"PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact",
+                "PostCompact", "SessionStart", "SessionEnd", "UserPromptSubmit",
+                "SubagentStart", "SubagentStop", "Stop", "Interrupt"}
 
 MISSING = object()
 
@@ -85,7 +99,7 @@ def plan() -> dict:
             hooks.append({
                 "event": hook["event"],
                 "matcher": hook.get("matcher"),
-                "command": hook["command"].format(claude=shlex.quote(str(CLAUDE))),
+                "command": hook["command"].format(home=shlex.quote(str(CLAUDE))),
                 "replaces": hook.get("replaces", []),
                 "async": hook.get("async", False),
                 "tool": name,
@@ -356,11 +370,11 @@ def link(src: pathlib.Path, dest: pathlib.Path, dry_run: bool):
     return "link"
 
 
-def prune_stale_links(keep: set, dry_run: bool):
+def prune_stale_links(keep: set, dry_run: bool, parents=(CLAUDE, CLAUDE / "skills")):
     """A symlink into this repo that nothing installs any more is left over from
     an older layout. Only symlinks are ever removed, never a real file."""
     removed = []
-    for parent in (CLAUDE, CLAUDE / "skills"):
+    for parent in parents:
         if not parent.is_dir():
             continue
         for entry in sorted(parent.iterdir()):
@@ -384,6 +398,235 @@ def write_tools_local(docs: list, dry_run: bool):
     if not dry_run:
         TOOLS_LOCAL.write_text(body)
     return True
+
+
+# --- codex ---------------------------------------------------------------------
+#
+# The second host, wired only where it is installed. Skills are the same
+# directory of `SKILL.md` files under a different root and hooks are the same
+# schema in a file of their own, so both come off the one registry rather than a
+# parallel one. What differs is where each lands and which events exist.
+
+
+def codex_binary():
+    return shutil.which("codex")
+
+
+def codex_plan() -> dict:
+    """The registry read for the other host. `{home}` resolves to Codex's own
+    config directory so a hook names the copy belonging to the host running it,
+    and a host that is uninstalled takes nothing of the other's with it."""
+    links = [(REPO / "CLAUDE.md", CODEX / "AGENTS.md"),
+             (REPO / "tools" / "mylint.py", CODEX / "mylint.py"),
+             (REPO / "tools" / "herd.py", CODEX / "herd.py"),
+             (REPO / "tools" / "herd-event.py", CODEX / "herd-event.py")]
+    for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
+        links.append((skill, CODEX / "skills" / skill.name))
+
+    hooks, mcp, refused = [], {}, []
+    for name, tool in registry().items():
+        if not located(tool):
+            continue
+        for hook in tool.get("hooks", []):
+            if not hook.get("codex", True):
+                continue
+            event = hook.get("codex_event", hook["event"])
+            if event not in CODEX_EVENTS:
+                refused.append((name, event))
+                continue
+            hooks.append({
+                "event": event,
+                "matcher": hook.get("matcher"),
+                "command": hook["command"].format(home=shlex.quote(str(CODEX))),
+                "replaces": hook.get("replaces", []),
+                "async": hook.get("async", False),
+                "tool": name,
+            })
+        if "mcp" in tool:
+            mcp[name] = tool["mcp"]
+    return {"links": links, "hooks": hooks, "mcp": mcp, "refused": refused}
+
+
+def read_codex_hooks() -> dict:
+    try:
+        return json.loads(CODEX_HOOKS.read_text())
+    except FileNotFoundError:
+        return {}
+    except ValueError as err:
+        sys.exit(f"{CODEX_HOOKS} is not valid JSON ({err}). Fix it before installing.")
+
+
+def write_codex_hooks(document: dict, dry_run: bool):
+    body = json.dumps(document, indent=2) + "\n"
+    if CODEX_HOOKS.exists() and CODEX_HOOKS.read_text() == body:
+        return False
+    if dry_run:
+        return True
+    backup = CODEX_HOOKS.with_name(f"hooks.json.bak-{date.today():%F}")
+    if CODEX_HOOKS.exists() and not backup.exists():
+        shutil.copy2(CODEX_HOOKS, backup)
+        print(f"  backup   {short(backup)}")
+    CODEX_HOOKS.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CODEX_HOOKS.with_name("hooks.json.tmp")
+    tmp.write_text(body)
+    tmp.replace(CODEX_HOOKS)
+    return True
+
+
+def read_codex_config() -> dict:
+    try:
+        return tomllib.loads(CODEX_CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as err:
+        sys.exit(f"{CODEX_CONFIG} is not valid TOML ({err}). Fix it before installing.")
+
+
+def codex_run(args: list, dry_run: bool) -> bool:
+    """`config.toml` is Codex's own file. It holds the trust hash of every hook
+    and the trust level of every project, so a rewrite from here would have to
+    reproduce a format this installer cannot read back, having no TOML writer.
+    Every change to it goes through the CLI that owns it."""
+    if dry_run:
+        return True
+    done = subprocess.run(["codex", *args], capture_output=True, text=True)
+    if done.returncode == 0:
+        return True
+    detail = done.stderr.strip().splitlines()
+    print(f"  failed   codex {' '.join(args)}: {detail[-1] if detail else done.returncode}")
+    return False
+
+
+def merge_codex_mcp(config: dict, servers: dict, dry_run: bool):
+    record, changes = [], []
+    configured = config.get("mcp_servers", {})
+    for name, entry in servers.items():
+        argv = [entry["command"], *entry.get("args", [])]
+        existing = configured.get(name)
+        if isinstance(existing, dict) and [existing.get("command"),
+                                           *existing.get("args", [])] == argv:
+            record.append({"name": name, "had": True})
+            continue
+        record.append({"name": name, "had": existing is not None})
+        if codex_run(["mcp", "add", name, "--", *argv], dry_run):
+            changes.append(f"mcp {name}: {' '.join(argv)}")
+    return record, changes
+
+
+def merge_codex_features(config: dict, wanted: bool, dry_run: bool):
+    """A hooks file the host has not been told to read is a file it ignores, so
+    the feature flag is part of wiring a hook rather than a preference."""
+    had = config.get("features", {}).get("hooks") is True
+    if had or not wanted:
+        return {"had": had}, []
+    if codex_run(["features", "enable", "hooks"], dry_run):
+        return {"had": False}, ["features.hooks: -> true"]
+    return {"had": True}, []
+
+
+def install_codex(dry_run: bool, previous: dict) -> dict:
+    steps = codex_plan()
+    print(f"\ncodex ({short(CODEX)})")
+    if not dry_run:
+        (CODEX / "skills").mkdir(parents=True, exist_ok=True)
+    for src, dest in steps["links"]:
+        print(f"  {link(src, dest, dry_run):8} {short(dest)}")
+    stale = prune_stale_links({dest for _, dest in steps["links"]}, dry_run,
+                              parents=(CODEX, CODEX / "skills"))
+    for entry in stale:
+        print(f"  remove   {short(entry)} (stale link into this repo)")
+    for tool, event in steps["refused"]:
+        print(f"  skip     {tool}: codex has no {event} event")
+
+    document = read_codex_hooks()
+    before = CODEX_HOOKS.read_text() if CODEX_HOOKS.exists() else ""
+    hooks_record, hooks_changes = merge_hooks(document, steps["hooks"])
+    prune_hooks(document)
+    for change in hooks_changes:
+        print(f"  {change}")
+    if write_codex_hooks(document, dry_run) and dry_run:
+        after = json.dumps(document, indent=2) + "\n"
+        print()
+        for row in difflib.unified_diff(before.splitlines(), after.splitlines(),
+                                        "hooks.json", "hooks.json (after)", lineterm=""):
+            print(f"  {row}")
+        print()
+
+    config = read_codex_config()
+    feature_record, feature_changes = merge_codex_features(config, bool(steps["hooks"]), dry_run)
+    mcp_record, mcp_changes = merge_codex_mcp(config, steps["mcp"], dry_run)
+    for change in feature_changes + mcp_changes:
+        print(f"  {change}")
+    if not (hooks_changes or feature_changes or mcp_changes):
+        print("  already current")
+    if steps["hooks"]:
+        print("  Codex asks once per hook before it runs one; approving records"
+              " its hash in config.toml.")
+
+    remembered_codex(previous, hooks_record, mcp_record, feature_record)
+    return {"links": [str(dest) for _, dest in steps["links"]],
+            "hooks": hooks_record, "mcpServers": mcp_record, "features": feature_record}
+
+
+def remembered_codex(previous: dict, hooks: list, mcp: list, features: dict):
+    """The same inheritance the Claude side does: only the first install saw the
+    values that predate this repo, so a later run takes that memory rather than
+    recording itself as the thing to put back."""
+    by_command = {entry["command"]: entry for entry in previous.get("hooks", [])}
+    for record in hooks:
+        displaced = record.get("was") or {}
+        source = by_command.get(record["command"]) or by_command.get(displaced.get("command"))
+        if source:
+            record.update({"had": source["had"], "was": source["was"],
+                           "index": source.get("index")})
+
+    by_name = {entry["name"]: entry for entry in previous.get("mcpServers", [])}
+    for record in mcp:
+        source = by_name.get(record["name"])
+        if source:
+            record["had"] = source["had"]
+
+    if previous.get("features"):
+        features.update(previous["features"])
+
+
+def uninstall_codex(saved: dict, dry_run: bool):
+    if not saved:
+        return
+    print(f"\ncodex ({short(CODEX)})")
+    for path in saved.get("links", []):
+        dest = pathlib.Path(path)
+        if dest.is_symlink() and REPO in pathlib.Path(os.readlink(dest)).parents:
+            print(f"  remove   {short(dest)}")
+            if not dry_run:
+                dest.unlink()
+
+    document = read_codex_hooks()
+    for entry in reversed(saved.get("hooks", [])):
+        for group in document.get("hooks", {}).get(entry["event"], []):
+            if group.get("matcher") != entry["matcher"]:
+                continue
+            kept = [h for h in group.get("hooks", []) if h.get("command") != entry["command"]]
+            if entry.get("was"):
+                kept.insert(min(entry.get("index") or 0, len(kept)), entry["was"])
+            group["hooks"] = kept
+        prior = entry.get("was")
+        verb, shown = ("restore ", prior.get("command")) if prior else ("remove  ", entry["command"])
+        print(f"  {verb} hook {shown}")
+    prune_hooks(document)
+    write_codex_hooks(document, dry_run)
+
+    for entry in saved.get("mcpServers", []):
+        if entry.get("had"):
+            print(f"  keep     mcp {entry['name']} (it was here first)")
+            continue
+        if codex_run(["mcp", "remove", entry["name"]], dry_run):
+            print(f"  remove   mcp {entry['name']}")
+
+    features = saved.get("features") or {}
+    if features and not features.get("had"):
+        if codex_run(["features", "disable", "hooks"], dry_run):
+            print("  restore  features.hooks")
 
 
 def remembered(previous: dict, hooks: list, prefs: list, mcp: list, status):
@@ -463,10 +706,13 @@ def install(dry_run: bool):
             print("  already current")
         write_user_config(user_config, dry_run)
 
+    codex_record = (install_codex(dry_run, before_this_run.get("codex") or {})
+                    if codex_binary() else None)
+
     remembered(before_this_run, hooks_record, prefs_record, mcp_record, status_record)
     if not dry_run:
         STATE.write_text(json.dumps({
-            "version": 1,
+            "version": 2,
             "repo": str(REPO),
             "installed": f"{date.today():%F}",
             "links": [str(dest) for _, dest in steps["links"]],
@@ -474,6 +720,7 @@ def install(dry_run: bool):
             "hooks": hooks_record,
             "mcpServers": mcp_record,
             "statusLine": status_record,
+            "codex": codex_record,
         }, indent=2) + "\n")
         print()
         doctor()
@@ -547,6 +794,7 @@ def uninstall(dry_run: bool):
             print("  remove   statusLine")
 
     write_settings(settings, dry_run)
+    uninstall_codex(saved.get("codex") or {}, dry_run)
     if TOOLS_LOCAL.exists():
         print(f"  remove   {short(TOOLS_LOCAL)}")
         if not dry_run:
@@ -599,6 +847,31 @@ def doctor():
         report(f"mcp {name}", name in loaded, short(USER_CONFIG))
         if name in stray:
             print(f"    stale copy in {short(SETTINGS)}, which is not read for these")
+
+    print(f"\ncodex ({short(CODEX)})")
+    if not codex_binary():
+        print("  missing  codex          not installed, so nothing here is wired")
+    else:
+        codex = codex_plan()
+        config = read_codex_config()
+        document = read_codex_hooks()
+        report("AGENTS.md linked", (CODEX / "AGENTS.md").is_symlink(),
+               short(CODEX / "AGENTS.md"))
+        linked = sum(1 for _, dest in codex["links"]
+                     if dest.parent.name == "skills" and dest.is_symlink())
+        report("skills linked", linked > 0, f"{linked} in {short(CODEX / 'skills')}")
+        report("features.hooks", config.get("features", {}).get("hooks") is True,
+               short(CODEX_CONFIG))
+        installed = {handler.get("command")
+                     for groups in document.get("hooks", {}).values()
+                     for group in groups for handler in group.get("hooks", [])}
+        for hook in codex["hooks"]:
+            report(f"hook {hook['tool']}", hook["command"] in installed, hook["command"])
+        for tool, event in codex["refused"]:
+            report(f"hook {tool}", False, f"codex has no {event} event")
+        servers = config.get("mcp_servers", {})
+        for name in codex["mcp"]:
+            report(f"mcp {name}", name in servers, short(CODEX_CONFIG))
 
     found = subprocess.run([sys.executable, str(REPO / "tools" / "mylint.py"), "--private"],
                            cwd=REPO, capture_output=True, text=True)

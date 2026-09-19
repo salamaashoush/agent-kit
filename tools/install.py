@@ -32,6 +32,8 @@ import sys
 import tomllib
 from datetime import date
 
+from codex_client import CodexClient
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 CLAUDE = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude")
 SETTINGS = CLAUDE / "settings.json"
@@ -83,18 +85,21 @@ def located(tool: dict):
 def plan() -> dict:
     """Everything this machine should end up with, tools it lacks excluded."""
     links = [(REPO / "CLAUDE.md", CLAUDE / "CLAUDE.md"),
+             (TOOLS_LOCAL, CLAUDE / "tools.local.md"),
              (REPO / "tools" / "mylint.py", CLAUDE / "mylint.py"),
              (REPO / "tools" / "herd.py", CLAUDE / "herd.py"),
              (REPO / "tools" / "herd-event.py", CLAUDE / "herd-event.py")]
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CLAUDE / "skills" / skill.name))
 
-    hooks, mcp, docs, present, status = [], {}, [], {}, None
+    hooks, mcp, docs, present, status, setup = [], {}, [], {}, None, {}
     for name, tool in registry().items():
         where = located(tool)
         if not where:
             continue
         present[name] = where
+        if "setup" in tool:
+            setup[name] = {"run": tool["setup"], "undo": tool.get("teardown", [])}
         for hook in tool.get("hooks", []):
             hooks.append({
                 "event": hook["event"],
@@ -114,7 +119,7 @@ def plan() -> dict:
             status = {"type": "command",
                       "command": f"bash {shlex.quote(str(CLAUDE / script.name))}"}
     return {"links": links, "hooks": hooks, "mcp": mcp, "docs": docs,
-            "present": present, "statusLine": status}
+            "present": present, "statusLine": status, "setup": setup}
 
 
 # --- settings.json -------------------------------------------------------------
@@ -264,6 +269,60 @@ def prune_hooks(settings: dict):
         settings.pop("hooks", None)
 
 
+def retired(previous: list, hooks: list) -> list:
+    """Hooks an earlier install wrote that `config/tools.toml` no longer names.
+    Left in place, a deleted tool keeps running, or keeps failing once the
+    script it names has gone."""
+    wanted = {(hook["event"], hook["matcher"], hook["command"]) for hook in hooks}
+    return [entry for entry in previous
+            if (entry["event"], entry["matcher"], entry["command"]) not in wanted]
+
+
+def run_commands(commands: list, dry_run: bool) -> bool:
+    ok = True
+    for command in commands:
+        print(f"  run      {command}")
+        if dry_run:
+            continue
+        done = subprocess.run(command, shell=True, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=300)
+        if done.returncode != 0:
+            detail = (done.stderr or done.stdout).strip().splitlines()
+            print(f"  failed   {detail[-1] if detail else f'exit {done.returncode}'}")
+            ok = False
+    return ok
+
+
+def run_setup(wanted: dict, previous: dict, dry_run: bool):
+    """A tool that ships its own installer is wired by running it rather than by
+    copying what it writes. Its teardown is recorded, so deleting the tool from
+    `config/tools.toml` still undoes it."""
+    ok = True
+    for name, undo in previous.items():
+        if name not in wanted:
+            ok &= run_commands(undo, dry_run)
+    for step in wanted.values():
+        ok &= run_commands(step["run"], dry_run)
+    return {name: step["undo"] for name, step in wanted.items()}, ok
+
+
+def unwire_hooks(settings: dict, entries: list) -> list:
+    changes = []
+    for entry in reversed(entries):
+        for group in settings.get("hooks", {}).get(entry["event"], []):
+            if group.get("matcher") != entry["matcher"]:
+                continue
+            kept = [h for h in group.get("hooks", []) if h.get("command") != entry["command"]]
+            if entry.get("was"):
+                kept.insert(min(entry.get("index") or 0, len(kept)), entry["was"])
+            group["hooks"] = kept
+        prior = entry.get("was")
+        verb, shown = ("restore ", prior.get("command")) if prior else ("remove  ", entry["command"])
+        changes.append(f"{verb} hook {shown}")
+    prune_hooks(settings)
+    return changes
+
+
 def merge_mcp(config: dict, servers: dict):
     """Into the user config rather than settings.json. Claude Code reads MCP
     servers from three places, none of them settings.json, so a server merged
@@ -313,8 +372,8 @@ def merge_statusline(settings: dict, status):
 
 
 def write_settings(settings: dict, dry_run: bool):
-    body = json.dumps(settings, indent=2) + "\n"
-    if SETTINGS.exists() and SETTINGS.read_text() == body:
+    body = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+    if SETTINGS.exists() and read_settings() == settings:
         return False
     if dry_run:
         return True
@@ -331,8 +390,8 @@ def write_settings(settings: dict, dry_run: bool):
 def write_user_config(config: dict, dry_run: bool):
     """Claude Code owns this file and rewrites it as it runs, so it is read and
     written in one pass and left untouched when the merge changed nothing."""
-    body = json.dumps(config, indent=2) + "\n"
-    if USER_CONFIG.exists() and USER_CONFIG.read_text() == body:
+    body = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+    if USER_CONFIG.exists() and read_user_config() == config:
         return False
     if dry_run:
         return True
@@ -355,13 +414,13 @@ def short(path) -> str:
 
 
 def link(src: pathlib.Path, dest: pathlib.Path, dry_run: bool):
-    if dest.is_symlink() and os.readlink(dest) == str(src):
-        return "ok"
-    if dest.exists() and not dest.is_symlink():
-        backup = dest.with_name(f"{dest.name}.bak-{date.today():%F}")
-        print(f"  backup   {short(dest)} -> {backup.name}")
-        if not dry_run:
-            dest.rename(backup)
+    if dest.is_symlink():
+        if dest.resolve() == src.resolve():
+            return "ok"
+        if not dest.resolve().is_relative_to(REPO):
+            return "keep"
+    elif dest.exists():
+        return "keep"
     if not dry_run:
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.is_symlink() or dest.exists():
@@ -391,7 +450,7 @@ def prune_stale_links(keep: set, dry_run: bool, parents=(CLAUDE, CLAUDE / "skill
 def write_tools_local(docs: list, dry_run: bool):
     lines = ["<!-- Generated by install.sh: the tool notes this machine has.",
              "     Edit config/tools.toml or tools/docs/, not this file. -->", ""]
-    lines += [f"@{doc}" for doc in docs]
+    lines += [(REPO / doc).read_text().rstrip() + "\n" for doc in docs]
     body = "\n".join(lines) + "\n"
     if TOOLS_LOCAL.exists() and TOOLS_LOCAL.read_text() == body:
         return False
@@ -417,34 +476,42 @@ def codex_plan() -> dict:
     config directory so a hook names the copy belonging to the host running it,
     and a host that is uninstalled takes nothing of the other's with it."""
     links = [(REPO / "CLAUDE.md", CODEX / "AGENTS.md"),
+             (TOOLS_LOCAL, CODEX / "tools.local.md"),
              (REPO / "tools" / "mylint.py", CODEX / "mylint.py"),
              (REPO / "tools" / "herd.py", CODEX / "herd.py"),
              (REPO / "tools" / "herd-event.py", CODEX / "herd-event.py")]
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CODEX / "skills" / skill.name))
 
-    hooks, mcp, refused = [], {}, []
+    hooks, mcp, refused, setup = [], {}, [], {}
     for name, tool in registry().items():
         if not located(tool):
             continue
+        requires = tool.get("codex_requires")
+        if requires and subprocess.run(requires, shell=True, stdin=subprocess.DEVNULL,
+                                       capture_output=True).returncode != 0:
+            refused.append((name, f"`{requires}` failed"))
+            continue
+        if "codex_setup" in tool:
+            setup[name] = {"run": tool["codex_setup"], "undo": tool.get("codex_teardown", [])}
         for hook in tool.get("hooks", []):
             if not hook.get("codex", True):
                 continue
             event = hook.get("codex_event", hook["event"])
             if event not in CODEX_EVENTS:
-                refused.append((name, event))
+                refused.append((name, f"codex has no {event} event"))
                 continue
             hooks.append({
                 "event": event,
                 "matcher": hook.get("matcher"),
-                "command": hook["command"].format(home=shlex.quote(str(CODEX))),
+                "command": hook.get("codex_command", hook["command"]).format(home=shlex.quote(str(CODEX))),
                 "replaces": hook.get("replaces", []),
                 "async": hook.get("async", False),
                 "tool": name,
             })
         if "mcp" in tool:
             mcp[name] = tool["mcp"]
-    return {"links": links, "hooks": hooks, "mcp": mcp, "refused": refused}
+    return {"links": links, "hooks": hooks, "mcp": mcp, "refused": refused, "setup": setup}
 
 
 def read_codex_hooks() -> dict:
@@ -457,8 +524,8 @@ def read_codex_hooks() -> dict:
 
 
 def write_codex_hooks(document: dict, dry_run: bool):
-    body = json.dumps(document, indent=2) + "\n"
-    if CODEX_HOOKS.exists() and CODEX_HOOKS.read_text() == body:
+    body = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    if CODEX_HOOKS.exists() and read_codex_hooks() == document:
         return False
     if dry_run:
         return True
@@ -483,18 +550,14 @@ def read_codex_config() -> dict:
 
 
 def codex_run(args: list, dry_run: bool) -> bool:
-    """`config.toml` is Codex's own file. It holds the trust hash of every hook
-    and the trust level of every project, so a rewrite from here would have to
-    reproduce a format this installer cannot read back, having no TOML writer.
-    Every change to it goes through the CLI that owns it."""
+    """Codex owns configuration serialization, including hook and project trust."""
     if dry_run:
         return True
-    done = subprocess.run(["codex", *args], capture_output=True, text=True)
+    done = subprocess.run(["codex", *args], capture_output=True, text=True, timeout=15)
     if done.returncode == 0:
         return True
     detail = done.stderr.strip().splitlines()
-    print(f"  failed   codex {' '.join(args)}: {detail[-1] if detail else done.returncode}")
-    return False
+    raise RuntimeError(f"codex {' '.join(args)}: {detail[-1] if detail else done.returncode}")
 
 
 def merge_codex_mcp(config: dict, servers: dict, dry_run: bool):
@@ -505,6 +568,10 @@ def merge_codex_mcp(config: dict, servers: dict, dry_run: bool):
         existing = configured.get(name)
         if isinstance(existing, dict) and [existing.get("command"),
                                            *existing.get("args", [])] == argv:
+            record.append({"name": name, "had": True})
+            continue
+        if existing is not None:
+            print(f"  keep     mcp {name} (existing configuration differs)")
             record.append({"name": name, "had": True})
             continue
         record.append({"name": name, "had": existing is not None})
@@ -524,6 +591,47 @@ def merge_codex_features(config: dict, wanted: bool, dry_run: bool):
     return {"had": True}, []
 
 
+def codex_fallback(installing: bool, dry_run: bool, previous: dict):
+    key = "project_doc_fallback_filenames"
+
+    def change(config):
+        current = config.get(key, [])
+        if not isinstance(current, list) or not all(isinstance(item, str) for item in current):
+            raise ValueError(f"{key} must be a list of filenames")
+        if installing:
+            record = previous or {"had": key in config, "added": "CLAUDE.md" not in current}
+            wanted = current if "CLAUDE.md" in current else [*current, "CLAUDE.md"]
+        else:
+            record = previous
+            if not record.get("added"):
+                return record, MISSING
+            wanted = [item for item in current if item != "CLAUDE.md"]
+            if not wanted and not record.get("had"):
+                wanted = None
+        unchanged = current == wanted or (wanted is None and key not in config)
+        return record, MISSING if unchanged else wanted
+
+    record, wanted = change(read_codex_config())
+    if wanted is MISSING:
+        return record
+    print(f"  {'add' if installing else 'remove':8} CLAUDE.md instruction fallback")
+    if not dry_run:
+        with CodexClient(CODEX) as client:
+            layers = client.request("config/read", {"includeLayers": True})["layers"]
+            user = next(layer for layer in layers if layer["name"].get("type") == "user"
+                        and layer["name"].get("file") == str(CODEX_CONFIG))
+            record, wanted = change(user["config"])
+            if wanted is not MISSING:
+                backup = CODEX_CONFIG.with_name(f"config.toml.bak-{date.today():%F}")
+                if CODEX_CONFIG.exists() and not backup.exists():
+                    shutil.copy2(CODEX_CONFIG, backup)
+                client.request("config/value/write", {
+                    "keyPath": key, "value": wanted, "mergeStrategy": "replace",
+                    "filePath": str(CODEX_CONFIG), "expectedVersion": user["version"],
+                })
+    return record
+
+
 def install_codex(dry_run: bool, previous: dict) -> dict:
     steps = codex_plan()
     print(f"\ncodex ({short(CODEX)})")
@@ -535,17 +643,19 @@ def install_codex(dry_run: bool, previous: dict) -> dict:
                               parents=(CODEX, CODEX / "skills"))
     for entry in stale:
         print(f"  remove   {short(entry)} (stale link into this repo)")
-    for tool, event in steps["refused"]:
-        print(f"  skip     {tool}: codex has no {event} event")
+    for tool, reason in steps["refused"]:
+        print(f"  skip     {tool}: {reason}")
 
     document = read_codex_hooks()
     before = CODEX_HOOKS.read_text() if CODEX_HOOKS.exists() else ""
-    hooks_record, hooks_changes = merge_hooks(document, steps["hooks"])
+    hooks_changes = unwire_hooks(document, retired(previous.get("hooks", []), steps["hooks"]))
+    hooks_record, merged = merge_hooks(document, steps["hooks"])
+    hooks_changes += merged
     prune_hooks(document)
     for change in hooks_changes:
         print(f"  {change}")
     if write_codex_hooks(document, dry_run) and dry_run:
-        after = json.dumps(document, indent=2) + "\n"
+        after = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         print()
         for row in difflib.unified_diff(before.splitlines(), after.splitlines(),
                                         "hooks.json", "hooks.json (after)", lineterm=""):
@@ -553,19 +663,22 @@ def install_codex(dry_run: bool, previous: dict) -> dict:
         print()
 
     config = read_codex_config()
+    instructions = codex_fallback(True, dry_run, previous.get("instructions") or {})
     feature_record, feature_changes = merge_codex_features(config, bool(steps["hooks"]), dry_run)
     mcp_record, mcp_changes = merge_codex_mcp(config, steps["mcp"], dry_run)
     for change in feature_changes + mcp_changes:
         print(f"  {change}")
     if not (hooks_changes or feature_changes or mcp_changes):
-        print("  already current")
+        print("  hooks, features and MCP already current")
     if steps["hooks"]:
         print("  Codex asks once per hook before it runs one; approving records"
               " its hash in config.toml.")
+    setup_record, setup_ok = run_setup(steps["setup"], previous.get("setup") or {}, dry_run)
 
     remembered_codex(previous, hooks_record, mcp_record, feature_record)
     return {"links": [str(dest) for _, dest in steps["links"]],
-            "hooks": hooks_record, "mcpServers": mcp_record, "features": feature_record}
+            "hooks": hooks_record, "mcpServers": mcp_record, "features": feature_record,
+            "instructions": instructions, "setup": setup_record}, setup_ok
 
 
 def remembered_codex(previous: dict, hooks: list, mcp: list, features: dict):
@@ -594,6 +707,7 @@ def uninstall_codex(saved: dict, dry_run: bool):
     if not saved:
         return
     print(f"\ncodex ({short(CODEX)})")
+    codex_fallback(False, dry_run, saved.get("instructions") or {})
     for path in saved.get("links", []):
         dest = pathlib.Path(path)
         if dest.is_symlink() and REPO in pathlib.Path(os.readlink(dest)).parents:
@@ -602,19 +716,11 @@ def uninstall_codex(saved: dict, dry_run: bool):
                 dest.unlink()
 
     document = read_codex_hooks()
-    for entry in reversed(saved.get("hooks", [])):
-        for group in document.get("hooks", {}).get(entry["event"], []):
-            if group.get("matcher") != entry["matcher"]:
-                continue
-            kept = [h for h in group.get("hooks", []) if h.get("command") != entry["command"]]
-            if entry.get("was"):
-                kept.insert(min(entry.get("index") or 0, len(kept)), entry["was"])
-            group["hooks"] = kept
-        prior = entry.get("was")
-        verb, shown = ("restore ", prior.get("command")) if prior else ("remove  ", entry["command"])
-        print(f"  {verb} hook {shown}")
-    prune_hooks(document)
+    for change in unwire_hooks(document, saved.get("hooks", [])):
+        print(f"  {change}")
     write_codex_hooks(document, dry_run)
+    for undo in (saved.get("setup") or {}).values():
+        run_commands(undo, dry_run)
 
     for entry in saved.get("mcpServers", []):
         if entry.get("had"):
@@ -677,7 +783,9 @@ def install(dry_run: bool):
     settings = read_settings()
     before_this_run = state()
     prefs_record, prefs_changes = merge_preferences(settings, preferences())
-    hooks_record, hooks_changes = merge_hooks(settings, steps["hooks"])
+    hooks_changes = unwire_hooks(settings, retired(before_this_run.get("hooks", []), steps["hooks"]))
+    hooks_record, merged = merge_hooks(settings, steps["hooks"])
+    hooks_changes += merged
     status_record, status_changes = merge_statusline(settings, steps["statusLine"])
     evicted = evict_settings_mcp(settings, steps["mcp"])
 
@@ -692,7 +800,7 @@ def install(dry_run: bool):
 
     before = SETTINGS.read_text() if SETTINGS.exists() else ""
     if write_settings(settings, dry_run) and dry_run:
-        after = json.dumps(settings, indent=2) + "\n"
+        after = json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
         print()
         for row in difflib.unified_diff(before.splitlines(), after.splitlines(),
                                         "settings.json", "settings.json (after)", lineterm=""):
@@ -706,12 +814,16 @@ def install(dry_run: bool):
             print("  already current")
         write_user_config(user_config, dry_run)
 
-    codex_record = (install_codex(dry_run, before_this_run.get("codex") or {})
-                    if codex_binary() else None)
+    if steps["setup"] or before_this_run.get("setup"):
+        print("\nsetup")
+    setup_record, setup_ok = run_setup(steps["setup"], before_this_run.get("setup") or {}, dry_run)
+
+    codex_record, codex_ok = (install_codex(dry_run, before_this_run.get("codex") or {})
+                              if codex_binary() else (None, True))
 
     remembered(before_this_run, hooks_record, prefs_record, mcp_record, status_record)
     if not dry_run:
-        STATE.write_text(json.dumps({
+        recorded = json.dumps({
             "version": 2,
             "repo": str(REPO),
             "installed": f"{date.today():%F}",
@@ -720,10 +832,14 @@ def install(dry_run: bool):
             "hooks": hooks_record,
             "mcpServers": mcp_record,
             "statusLine": status_record,
+            "setup": setup_record,
             "codex": codex_record,
-        }, indent=2) + "\n")
+        }, indent=2) + "\n"
+        if not STATE.exists() or STATE.read_text() != recorded:
+            STATE.write_text(recorded)
         print()
         doctor()
+    return setup_ok and codex_ok
 
 
 def uninstall(dry_run: bool):
@@ -756,18 +872,8 @@ def uninstall(dry_run: bool):
             drop_path(settings, path)
         print(f"  restore  {'.'.join(path)}")
 
-    for entry in reversed(saved.get("hooks", [])):
-        for group in settings.get("hooks", {}).get(entry["event"], []):
-            if group.get("matcher") != entry["matcher"]:
-                continue
-            kept = [h for h in group.get("hooks", []) if h.get("command") != entry["command"]]
-            if entry.get("was"):
-                kept.insert(min(entry.get("index") or 0, len(kept)), entry["was"])
-            group["hooks"] = kept
-        prior = entry.get("was")
-        verb, shown = ("restore ", prior.get("command")) if prior else ("remove  ", entry["command"])
-        print(f"  {verb} hook {shown}")
-    prune_hooks(settings)
+    for change in unwire_hooks(settings, saved.get("hooks", [])):
+        print(f"  {change}")
 
     recorded = [entry["name"] for entry in saved.get("mcpServers", [])]
     user_config = read_user_config()
@@ -794,6 +900,8 @@ def uninstall(dry_run: bool):
             print("  remove   statusLine")
 
     write_settings(settings, dry_run)
+    for undo in (saved.get("setup") or {}).values():
+        run_commands(undo, dry_run)
     uninstall_codex(saved.get("codex") or {}, dry_run)
     if TOOLS_LOCAL.exists():
         print(f"  remove   {short(TOOLS_LOCAL)}")
@@ -804,7 +912,39 @@ def uninstall(dry_run: bool):
     print("\nBackups of settings.json and of any file this replaced are kept alongside them.")
 
 
+def codex_runtime_checks(steps, report):
+    try:
+        with CodexClient(REPO) as client:
+            hooks = client.request("hooks/list", {"cwds": [str(REPO)]})["data"]
+            skills = client.request("skills/list", {"cwds": [str(REPO)], "forceReload": True})["data"]
+        loaded = [hook for entry in hooks for hook in entry["hooks"]]
+        for wanted in steps["hooks"]:
+            event = wanted["event"][0].lower() + wanted["event"][1:]
+            matches = [hook for hook in loaded if hook.get("command") == wanted["command"]
+                       and hook["eventName"] == event and hook.get("matcher") == wanted["matcher"]]
+            active = any(hook["enabled"] and hook["trustStatus"] in {"trusted", "managed"}
+                         for hook in matches)
+            status = ", ".join(hook["trustStatus"] if hook["enabled"] else "disabled" for hook in matches)
+            report(f"active hook {wanted['tool']}", active,
+                   status or "not loaded; run install, then review /hooks in Codex")
+        visible = {pathlib.Path(skill["path"]).resolve() for entry in skills for skill in entry["skills"]
+                   if skill.get("enabled")}
+        expected = {src.resolve() / "SKILL.md" for src, dest in steps["links"] if dest.parent.name == "skills"}
+        report("skills loaded by Codex", expected <= visible, f"{len(expected & visible)}/{len(expected)}")
+        for entry in hooks + skills:
+            for error in entry.get("errors", []):
+                report("Codex load error", False, error["message"])
+    except (OSError, RuntimeError, TimeoutError, KeyError) as error:
+        report("Codex runtime checks", False, str(error))
+
+
 def doctor():
+    checks = []
+
+    def checked(label, good, detail=""):
+        checks.append(bool(good))
+        report(label, good, detail)
+
     steps = plan()
     settings = read_settings()
     print("tools")
@@ -820,6 +960,8 @@ def doctor():
                 wired.append("doc")
             if tool.get("statusline"):
                 wired.append("status line")
+            if tool.get("setup") or tool.get("codex_setup"):
+                wired.append("setup")
             print(f"  ok       {name:14} {', '.join(wired) or 'skill'}")
         else:
             hint = tool.get("source", "")
@@ -827,24 +969,24 @@ def doctor():
 
     print("\nchecks")
     scanners = REPO / "skills" / "unslop" / "scripts" / "banned_phrase_scan.py"
-    report("mylint scanners", scanners.exists(), short(scanners))
-    report("CLAUDE.md linked", (CLAUDE / "CLAUDE.md").is_symlink(), short(CLAUDE / "CLAUDE.md"))
-    report("tool notes generated", TOOLS_LOCAL.exists(), short(TOOLS_LOCAL))
+    checked("mylint scanners", scanners.exists(), short(scanners))
+    checked("CLAUDE.md linked", (CLAUDE / "CLAUDE.md").resolve() == (REPO / "CLAUDE.md").resolve(), short(CLAUDE / "CLAUDE.md"))
+    checked("tool notes generated", TOOLS_LOCAL.exists(), short(TOOLS_LOCAL))
 
     installed_hooks = {h.get("command")
                        for groups in settings.get("hooks", {}).values()
                        for group in groups for h in group.get("hooks", [])}
     for hook in steps["hooks"]:
-        report(f"hook {hook['tool']}", hook["command"] in installed_hooks, hook["command"])
+        checked(f"hook {hook['tool']}", hook["command"] in installed_hooks, hook["command"])
 
     if steps["statusLine"]:
-        report("status line", settings.get("statusLine") == steps["statusLine"],
+        checked("status line", settings.get("statusLine") == steps["statusLine"],
                steps["statusLine"]["command"])
 
     stray = settings.get("mcpServers", {})
     loaded = read_user_config().get("mcpServers", {})
     for name in steps["mcp"]:
-        report(f"mcp {name}", name in loaded, short(USER_CONFIG))
+        checked(f"mcp {name}", name in loaded, short(USER_CONFIG))
         if name in stray:
             print(f"    stale copy in {short(SETTINGS)}, which is not read for these")
 
@@ -854,32 +996,33 @@ def doctor():
     else:
         codex = codex_plan()
         config = read_codex_config()
-        document = read_codex_hooks()
-        report("AGENTS.md linked", (CODEX / "AGENTS.md").is_symlink(),
+        checked("AGENTS.md linked", (CODEX / "AGENTS.md").resolve() == (REPO / "CLAUDE.md").resolve(),
                short(CODEX / "AGENTS.md"))
-        linked = sum(1 for _, dest in codex["links"]
-                     if dest.parent.name == "skills" and dest.is_symlink())
-        report("skills linked", linked > 0, f"{linked} in {short(CODEX / 'skills')}")
-        report("features.hooks", config.get("features", {}).get("hooks") is True,
+        for src, dest in codex["links"]:
+            checked("link " + dest.name, dest.exists() and dest.resolve() == src.resolve(), short(dest))
+        checked("CLAUDE.md fallback", "CLAUDE.md" in config.get("project_doc_fallback_filenames", []),
+                short(CODEX_CONFIG))
+        checked("features.hooks", config.get("features", {}).get("hooks") is True,
                short(CODEX_CONFIG))
-        installed = {handler.get("command")
-                     for groups in document.get("hooks", {}).values()
-                     for group in groups for handler in group.get("hooks", [])}
-        for hook in codex["hooks"]:
-            report(f"hook {hook['tool']}", hook["command"] in installed, hook["command"])
-        for tool, event in codex["refused"]:
-            report(f"hook {tool}", False, f"codex has no {event} event")
+        codex_runtime_checks(codex, checked)
+        for tool, reason in codex["refused"]:
+            checked(f"hook {tool}", False, reason)
         servers = config.get("mcp_servers", {})
         for name in codex["mcp"]:
-            report(f"mcp {name}", name in servers, short(CODEX_CONFIG))
+            checked(f"mcp {name}",
+                    servers.get(name, {}).get("command") == codex["mcp"][name]["command"]
+                    and servers.get(name, {}).get("args", []) == codex["mcp"][name].get("args", [])
+                    and servers.get(name, {}).get("enabled", True), short(CODEX_CONFIG))
 
     found = subprocess.run([sys.executable, str(REPO / "tools" / "mylint.py"), "--private"],
                            cwd=REPO, capture_output=True, text=True)
     if found.returncode == 2:
-        report("private names list", False, "none here, see config/private-names.example.json")
+        checked("private names list", False, "none here, see config/private-names.example.json")
     else:
         counted = [line for line in found.stdout.splitlines() if "private name" in line]
-        report("no private names", found.returncode == 0, counted[-1] if counted else "")
+        checked("no private names", found.returncode == 0, counted[-1] if counted else "")
+
+    return all(checks)
 
 
 def report(label: str, good: bool, detail: str = ""):
@@ -894,11 +1037,11 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.doctor:
-        doctor()
+        return 0 if doctor() else 1
     elif args.uninstall:
         uninstall(args.dry_run)
     else:
-        install(args.dry_run)
+        return 0 if install(args.dry_run) else 1
     return 0
 
 

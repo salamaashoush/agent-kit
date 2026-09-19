@@ -32,7 +32,7 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 | `config/preferences.json` | merged into `~/.claude/settings.json` | The settings this repo owns |
 | `config/tools.toml` | hooks and MCP servers for both hosts | Every optional tool, and how each is wired |
 | `config/private-names.example.json` | copied by hand to `~/.claude/private-names.json` | The shape of the `--private` list, never the list |
-| `tools/docs/*.md` | `tools.local.md`, which `CLAUDE.md` imports | Notes on a tool, loaded only where that tool exists |
+| `tools/docs/*.md` | `tools.local.md`, linked from `CLAUDE.md` | Notes on a tool, loaded only where that tool exists |
 | `tools/mylint.py` | `~/.claude/mylint.py` | Checks a draft, a commit message, or a PR body |
 | `tools/statusline.sh` | `~/.claude/statusline.sh`, named by `statusLine` | The status line, wired only where `jq` exists |
 | `tools/install.py` | stays here | The installer `install.sh` runs |
@@ -43,8 +43,8 @@ Python 3.11 or newer, for `tomllib`. Nothing else.
 
 | Tool | Where it comes from | Wired as |
 | --- | --- | --- |
-| `careful` | this repo | `PreToolUse` hook on `Bash` |
 | `rtk` | [rtk-ai/rtk](https://github.com/rtk-ai/rtk) | `PreToolUse` hook on `Bash`, plus notes in `CLAUDE.md` |
+| `caveman` | [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) | its own installers: a Claude plugin, and skills for Codex |
 | `ferridriver` | [salamaashoush/ferridriver](https://github.com/salamaashoush/ferridriver) | MCP server in `~/.claude.json`, plus notes in `CLAUDE.md` |
 | `statusline` | this repo | `statusLine` in `settings.json`, needing `jq` |
 
@@ -64,20 +64,28 @@ args = ["mcp"]
 
 A `statusline = "tools/x.sh"` key is the third thing a block can wire: the script
 is symlinked next to the settings that name it, so the path in `settings.json`
-survives this clone moving, the same way the `careful` hook does.
+survives this clone moving, the same way the herd hooks do.
+
+A tool that ships its own installer is wired by running it: `setup` lists the
+commands for Claude and `codex_setup` those for Codex, each run on every
+install, so they have to be safe to repeat. `teardown` and `codex_teardown` are
+recorded when the install runs, which is what lets `--uninstall`, or deleting
+the block, undo a tool whose definition is gone.
 
 `probe` is the whole conditional. No binary means no hook, no MCP server, and no
 notes in the context, so the same clone installs cleanly on a machine that has
-none of these. Hook order inside one event follows this file, which is why
-`careful` sits first: it has to read the command as typed, before rtk rewrites
-it.
+none of these. Hook order inside one event follows this file, and deleting a
+block unwires its hooks on the next install.
 
 `{home}` in a hook command is the host's own config directory, so each host
 runs the copy belonging to it and uninstalling one takes nothing of the other's
 with it. A hook goes to both hosts under the same event name, and two keys say
 otherwise: `codex_event` renames it, which is what `herd`'s `Notification` needs
 because Codex has no such event and `PermissionRequest` is the half that
-matters; `codex = false` withholds it entirely.
+matters; `codex = false` withholds it entirely. `codex_command` gives Codex a
+different command, which is how `rtk` runs `rtk hook codex` there, and a
+tool's `codex_requires` is a command that must succeed before Codex gets any of
+it, since an rtk older than that subcommand would block every shell command.
 
 ## Codex
 
@@ -92,22 +100,32 @@ Codex is wired where `codex` is on `PATH`, off the same `config/`, and
 | MCP servers | `~/.claude.json` | `config.toml`, written by `codex mcp add` |
 | Status line | `statusLine` | nothing, see below |
 
-Both instruction files are symlinks to the one `CLAUDE.md`, so an edit is live
-for both. The cost is `@tools.local.md`: Claude expands that import and Codex
-does not, so Codex reads the line verbatim and never gets the rtk and
-ferridriver notes behind it. Everything above that line, which is all of the
-instructions proper, it gets.
+Both instruction files are symlinks to the one `CLAUDE.md`. Tool notes are
+rendered into `tools.local.md` and linked beside both instruction files. The
+shared instructions tell each agent to read those notes before using a tool;
+neither host needs to expand an `@` import. The installer also adds `CLAUDE.md`
+to `project_doc_fallback_filenames`, preserving existing fallback filenames,
+so Codex reads project instructions in repositories that only have `CLAUDE.md`.
+Start a new Codex session after installing to load the updated instructions.
 
-**`config.toml` is Codex's own file** and this installer never rewrites it. It
-holds the trust hash of every hook and the trust level of every project, in a
-format there is no writer for here, so both changes to it go through the CLI
-that owns them: `codex mcp add` and `codex features enable hooks`. State is read
-back with `tomllib`, which is what keeps a second run a no-op.
+**`config.toml` is Codex's own file.** MCP and feature changes go through
+`codex mcp add` and `codex features enable hooks`. Instruction fallbacks use
+Codex's local app-server configuration API with an expected version, so a
+concurrent configuration edit rejects the write. Existing hook trust, project
+settings and custom MCP servers are preserved. Repeated installs leave
+unchanged configuration files and their timestamps alone.
 
 **Codex asks before it runs a hook**, once each, and records the hash it
-approved in `config.toml`. The installer does not forge those: a trust prompt
-answered by the thing being trusted is not a trust prompt. Approve them on the
-first session after installing.
+approved in `config.toml`. The installer does not forge those. Review new or
+changed definitions with `/hooks`. `--doctor` queries the local app server to
+check that managed hooks are enabled and trusted and that skills actually
+loaded. It exits nonzero when a required check fails. These checks make no
+model requests.
+
+
+Run `python3 -m unittest discover -s tests` for installer and hook regression
+tests. The integration tests require Codex on `PATH`; they exercise its local
+configuration protocol without model requests.
 
 **Two things do not port.** Codex's status line is a list of segments it renders
 itself rather than a script it runs, so `tools/statusline.sh` stays Claude's.
@@ -124,11 +142,11 @@ nine here and neither install nor uninstall touches them.
 
 ## What the installer will not do
 
-**Clobber something of yours.** A real file where a symlink belongs is renamed
-to `.bak-<date>` first, `settings.json` and `~/.claude.json` are copied to
-`.bak-<date>` before the first edit of the day, and the only symlinks it ever
-removes are ones pointing into this repo. `--dry-run` prints the settings diff
-without writing.
+**Clobber something of yours.** Existing real files and symlinks pointing
+outside this repo are kept and reported. Configuration files are copied to
+`.bak-<date>` before the first edit of the day, and the only symlinks the
+installer removes are ones pointing into this repo. `--dry-run` prints the
+settings diff without writing.
 
 **Keep a key it does not name.** The merge touches the keys in
 `config/preferences.json`, and the hooks, MCP servers and status line named in
@@ -243,9 +261,9 @@ Third-party skills are **vendored rather than submoduled**, so I can change them
 without waiting on upstream or losing the change to a pull. Every one is
 attributed below, with its licence in `vendor-licenses/`. The cost is that a
 fix upstream will not arrive on its own; re-sync by diffing against the source
-repo. Checked on 2026-08-29 against pstack `9a24d14`, mattpocock/skills
-`6654f6b` and unslop `d81f519`: every vendored file matches byte for byte except
-the two below, both deliberate.
+repo. Checked on 2026-08-29 against mattpocock/skills `6654f6b` and unslop
+`d81f519`: every vendored file matches byte for byte except where the table
+says otherwise.
 
 | Skill | Origin | Licence | Changed from upstream |
 | --- | --- | --- | --- |
@@ -254,28 +272,7 @@ the two below, both deliberate.
 | `resolving-merge-conflicts` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
 | `grill-me` / `grilling` | [mattpocock/skills](https://github.com/mattpocock/skills) | MIT | as-is |
 | `spec-review` | [mattpocock/skills](https://github.com/mattpocock/skills) `code-review` | MIT | renamed, so it stops colliding with the built-in `/code-review`, which its description now points at for correctness passes |
-| `careful` | [no-session/pstack](https://github.com/no-session/pstack) | MIT | BSD `sed` fix, then a rewrite onto bash builtins, see below |
 | `unslop` | [theclaymethod/unslop](https://github.com/theclaymethod/unslop) | MIT (declared in its frontmatter; the repo ships no LICENSE file) | runtime only: `SKILL.md`, `references/`, `presets/`, `scripts/`. Its `evals/` and `plans/` stay upstream |
-
-`careful` needed a fix to work on macOS at all. `check-careful.sh` used GNU `\s`
-inside `sed -E`, which BSD sed does not understand, so the argument extraction
-returned the whole command, every target looked unsafe, and it warned on every
-`rm -rf node_modules` despite documenting that as an exception. Eighteen
-occurrences are now `[[:space:]]`. Worth upstreaming: it affects every macOS
-user.
-
-The second change is the hook's cost. It fires on every Bash tool call, and
-`cat`, `grep`, `sed` and `tr` meant four forks a call, roughly 30s across a
-median session of 290 of them. Matching is now `[[ =~ ]]`, `nocasematch` and
-parameter expansion, with subprocesses left on the warn path, which fires
-rarely. That one stays here: it is a rewrite of the file, not a portability fix,
-and upstream may not want it.
-
-It runs as an always-on hook rather than a session-scoped skill, installed by
-`install.sh` and named through `~/.claude/skills/careful`, so moving this clone
-does not break it. Note it returns `permissionDecision: "ask"`, which may not
-stop anything under bypass-permissions mode; `"deny"` is the stronger setting if
-that turns out to matter.
 
 ## What is deliberately not here
 

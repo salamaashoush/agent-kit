@@ -1,6 +1,11 @@
 {
   "permissions": {
     "defaultMode": "auto",
+    "allow": [
+      "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)",
+      "Bash(ls:*)", "Bash(tree:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)",
+      "Bash(grep:*)", "Bash(diff:*)"
+    ],
     "deny": ["Artifact"]
   },
   "effortLevel": "xhigh",

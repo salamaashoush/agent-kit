@@ -23,8 +23,13 @@ which rtk             # Verify correct binary
 
 ## Hook-Based Usage
 
-All other commands are automatically rewritten by the Claude Code hook.
-Example: `git status` → `rtk git status` (transparent, 0 tokens overhead).
-`install.sh` wires that hook, after `careful`, when `rtk` is on PATH.
+Supported shell commands are rewritten by the PreToolUse hook in Claude Code
+and Codex. Example: `git status` → `rtk git status` (transparent, 0 tokens
+overhead). `install.sh` wires that hook when `rtk` is on PATH.
+
+In Claude a rewrite runs without a prompt only when the original command
+matches a `Bash(...)` allow rule; otherwise Claude asks about `rtk ...`. Codex
+runs `rtk hook codex`, and its own approval and sandbox still apply to the
+rewritten command. After a hook change, approve it in Codex's `/hooks`.
 
 `rtk --help` lists the rest.

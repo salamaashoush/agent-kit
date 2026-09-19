@@ -358,12 +358,44 @@ def show(live: list) -> None:
         print(session.line())
 
 
+# The agents this can start, under the name a person types. `kind` is what
+# herdr detects in the pane, and `argv` is the agent's own command line, which
+# only Claude has a remote-control flag on: the other two are reached through
+# their pane. All three spell the model `--model`, so that is added outside.
+#
+# A session started here is one nobody is sitting in front of, so each runs the
+# way `config/preferences.json` already runs Claude: `defaultMode: auto` with
+# the dangerous-mode prompt skipped. An agent that stops on the first `bun
+# install` and waits is a session that has done nothing by morning. Codex keeps
+# its sandbox and only drops the asking, which is the closest of the three to
+# what `auto` means; Antigravity has one flag and it is all or nothing.
+AGENTS = {
+    "claude": {"kind": "claude", "argv": lambda name: ["--remote-control", name]},
+    "codex": {"kind": "codex", "argv": lambda name: [
+        "--ask-for-approval", "never", "--sandbox", "workspace-write"]},
+    "antigravity": {"kind": "agy", "argv": lambda name: [
+        "--dangerously-skip-permissions"]},
+}
+
+
+def agent_kind(name: str) -> str:
+    """`agy` is what herdr calls Antigravity and what its own binary is not, so
+    both spellings answer. A name none of them knows is refused with the list
+    rather than started as a Claude session that was never asked for."""
+    chosen = (name or "claude").lower()
+    chosen = {"agy": "antigravity", "ag": "antigravity"}.get(chosen, chosen)
+    if chosen not in AGENTS:
+        raise SystemExit(f'"{name}" is not an agent: {", ".join(AGENTS)}')
+    return chosen
+
+
 def start(args) -> None:
     inside()
     if not args.name or set(args.name) - set(NAME) or args.name[0] not in NAME[:26]:
         raise SystemExit(f'"{args.name}" is not a name: lowercase, starts with a letter')
     if any(s.name == args.name for s in sessions()):
         raise SystemExit(f'"{args.name}" is already running')
+    args.agent = agent_kind(getattr(args, "agent", None))
 
     # `--worktree` takes an optional branch, so `--worktree brief.md` binds the
     # brief to it and the session starts with nothing to do. It printed "give
@@ -416,8 +448,18 @@ def start(args) -> None:
         made = herdr("tab", "create", "--cwd", where, "--label", args.name, "--no-focus")
         pane = made["root_pane"]["pane_id"]
 
-    herdr("agent", "start", args.name, "--kind", "claude", "--pane", pane,
-          "--", "--remote-control", args.name)
+    # Everything after `--` is the agent's own command line.
+    agent = AGENTS[getattr(args, "agent", None) or "claude"]
+    argv = list(agent["argv"](args.name))
+    if getattr(args, "yolo", False):
+        if args.agent == "codex":
+            argv = ["--dangerously-bypass-approvals-and-sandbox"]
+        elif args.agent == "claude":
+            argv += ["--dangerously-skip-permissions"]
+    if getattr(args, "model", None):
+        argv += ["--model", args.model]
+    herdr("agent", "start", args.name, "--kind", agent["kind"], "--pane", pane,
+          "--", *argv)
     if brief:
         herdr("agent", "prompt", args.name, brief)
 
@@ -777,6 +819,14 @@ def main() -> int:
     begin.add_argument("--branch", help="what to call its branch")
     begin.add_argument("--cwd")
     begin.add_argument("--repo", help="a repo under ~/Workspace, cloned from your account if absent")
+    # Which agent runs it. Claude unless told otherwise, because that is what
+    # every other command's output was written for.
+    begin.add_argument("--agent", help=f"which agent runs it: {', '.join(AGENTS)}")
+    begin.add_argument("--yolo", action="store_true", help="use the agent's unrestricted execution mode")
+    # Which model the session runs on, as that agent's own `--model` spells it:
+    # `claude-opus-5`, `gpt-5.5-codex`, `gemini-3.8-flash-high`. Left unsaid,
+    # the session gets the account's default, whatever it last saved.
+    begin.add_argument("--model", help="the model, as that agent's --model spells it")
     begin.set_defaults(run=start)
 
     onto = sub.add_parser("on", help="start work on a repo")
@@ -784,9 +834,13 @@ def main() -> int:
     onto.add_argument("brief", nargs="?", help="a file holding what it should do")
     onto.add_argument("--name", help="what to call the session (default: the repo)")
     onto.add_argument("--branch", help="what to call its branch")
+    onto.add_argument("--agent", help=f"which agent runs it: {', '.join(AGENTS)}")
+    onto.add_argument("--yolo", action="store_true", help="use the agent's unrestricted execution mode")
+    onto.add_argument("--model", help="the model, as that agent's --model spells it")
     onto.set_defaults(run=lambda a: start(argparse.Namespace(
         name=a.name or "".join(c if c in NAME else "-" for c in os.path.basename(a.repo).lower()),
         brief=a.brief, worktree=False, branch=a.branch, cwd=None, repo=a.repo,
+        model=a.model, agent=a.agent, yolo=a.yolo,
     )))
 
     waiting = sub.add_parser("watch", help="block until they stop working")

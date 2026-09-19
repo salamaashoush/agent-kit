@@ -1,6 +1,6 @@
 ---
 name: herd
-description: Run other Claude sessions from this one, over Herdr.
+description: Run Claude and Codex sessions from this one, over Herdr.
 disable-model-invocation: true
 ---
 
@@ -23,6 +23,17 @@ disable-model-invocation: true
 directory, or a few words of what the session is doing. Pass it across
 unchanged rather than guessing which was meant. Two matches is a refusal
 carrying the list, and that list is the answer to relay.
+
+For Codex, pass `--agent codex`. It defaults to a workspace sandbox with no
+approval prompts. For Claude, pass `--agent claude` or omit `--agent`.
+`--yolo` selects unrestricted execution for either host: Codex bypasses
+approvals and sandboxing; Claude skips permission checks while retaining
+remote control. Use it when the user requests unrestricted execution.
+To use an existing checkout, pass `--cwd /path/to/repo`; `--repo`
+creates a worktree. An explicit request to work on main takes precedence over
+the worktree guidance below; avoid concurrent writers in that checkout.
+
+    herd start browser brief.md --agent codex --yolo --cwd ~/Workspace/ferridriver
 
 ## The session that runs the others
 

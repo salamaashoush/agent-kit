@@ -13,7 +13,7 @@
 [rtk]
 what = "Filters and summarises command output before it reaches the context."
 probe = "rtk"
-source = "https://github.com/rtk-ai/rtk"
+source = "mise use -g rtk"
 doc = "tools/docs/rtk.md"
 # `rtk hook codex` arrived after 0.49. An older rtk exits 2 on it, which Codex
 # reads as a block, so every shell command would fail; such a Codex gets no hook.
@@ -48,7 +48,7 @@ codex_teardown = ["npx -y skills remove -g -a codex -y caveman cavecrew caveman-
 [ferridriver]
 what = "Drives Chromium, Firefox and WebKit behind one Playwright-shaped API."
 probe = "ferridriver"
-source = "cargo install ferridriver"
+source = "mise use -g github:salamaashoush/ferridriver"
 doc = "tools/docs/ferridriver.md"
 
 [ferridriver.mcp]
@@ -59,7 +59,7 @@ args = ["mcp"]
 [statusline]
 what = "Folder, branch, model and a context-usage bar, in one line."
 probe = "jq"
-source = "jq: brew install jq, or pacman -S jq"
+source = "mise use -g jq"
 # The script is symlinked next to the settings that name it, so the path in
 # settings.json survives this clone moving. A Nerd Font renders the glyphs.
 #

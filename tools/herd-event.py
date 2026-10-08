@@ -16,6 +16,27 @@ import time
 
 EVENTS = os.path.expanduser("~/.herdr/events.jsonl")
 KEEP = ("session_id", "cwd", "hook_event_name", "notification_type", "message", "title")
+# Every turn of every session appends a line, forever. Past CAP the file is cut
+# to its newest KEPT bytes. `herd watch` reads by offset and restarts from the
+# end of a file that shrank below it, so a cut costs it at most the events
+# written before its next poll.
+CAP = 1 << 20
+KEPT = CAP // 2
+
+
+def trim() -> None:
+    """Cut the log back to its newest lines. Another session appending between
+    the read and the replace loses that one line, once per megabyte."""
+    if os.path.getsize(EVENTS) <= CAP:
+        return
+    with open(EVENTS, "rb") as recorded:
+        recorded.seek(-KEPT, os.SEEK_END)
+        tail = recorded.read()
+    tail = tail[tail.find(b"\n") + 1:]
+    temporary = f"{EVENTS}.{os.getpid()}.tmp"
+    with open(temporary, "wb") as out:
+        out.write(tail)
+    os.replace(temporary, EVENTS)
 
 
 def main() -> int:
@@ -37,6 +58,7 @@ def main() -> int:
         # sessions finishing at once from interleaving into one broken line.
         with open(EVENTS, "a") as events:
             events.write(json.dumps(line) + "\n")
+        trim()
     except OSError:
         pass
     return 0

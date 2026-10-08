@@ -118,10 +118,12 @@ doc examples, and config samples all use neutral stand-ins: `acme`,
 `example.com`, `APP_PASSWORD`, `API_TOKEN`.
 
 Check before publishing, and again before any push that adds documentation or
-fixtures:
+fixtures. It also catches secrets, public IPs and real email addresses;
+`--history` covers every commit, which is what going public exposes:
 
 ```
 python3 ~/.claude/mylint.py --private
+python3 ~/.claude/mylint.py --private --history
 ```
 
 Two traps make a careless cleanup worse than none. Replacing a bare company

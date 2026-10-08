@@ -231,7 +231,8 @@ Four modes, all exiting non-zero when they find something:
 python3 ~/.claude/mylint.py draft.md                        # spelling and run-ons
 python3 ~/.claude/mylint.py --commit msg.txt                # commit-message shape
 python3 ~/.claude/mylint.py --pr body.md                    # PR-description shape
-python3 ~/.claude/mylint.py --private                       # private names
+python3 ~/.claude/mylint.py --private                       # secrets, public IPs, emails, private names
+python3 ~/.claude/mylint.py --private --history             # the same over every commit and message
 git show -s --format=%B HEAD | python3 ~/.claude/mylint.py --commit
 pbpaste | python3 ~/.claude/mylint.py
 ```
@@ -247,11 +248,19 @@ those are not the tell.
 Rerun the numbers against a fresh sample before trusting them on someone else's
 writing. They describe one person.
 
-`--private` reads its patterns from `~/.claude/private-names.json`, which this
-repo does not carry and must not: writing those names here in order to catch
-them would publish them. `config/private-names.example.json` shows the shape
-with `acme` stand-ins. Without that file `--private` exits 2 and says where it
-looked, rather than reporting a repo clean because it had nothing to look for.
+`--private` has built-in detectors that need no configuration: private keys,
+GitHub, AWS, Slack, OpenAI, Anthropic, Google and Stripe tokens, quoted
+`password`/`token`/`api_key` assignments (stand-ins such as `changeme` or
+`${API_KEY}` pass), public IP addresses (private, documentation and multicast
+ranges and the public resolvers pass), and email addresses outside the example
+and noreply domains. `--history` runs them over every line any commit added and
+every commit message, because publishing a repo publishes its history.
+
+Your own names come from `~/.claude/private-names.json`, which this repo does
+not carry and must not: writing those names here in order to catch them would
+publish them. `config/private-names.example.json` shows the shape with `acme`
+stand-ins, and its `allow` substrings clear a line for every detector. Without
+that file `--private` says so and runs the built-in detectors alone.
 
 The AI-tell and structure checks come from unslop's scanners, read from the
 vendored copy in `skills/unslop/scripts`. They used to be read from a second

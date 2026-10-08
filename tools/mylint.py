@@ -5,7 +5,8 @@ then hand it to unslop's scanners for the AI tells.
     python3 mylint.py draft.md
     pbpaste | python3 mylint.py
     python3 mylint.py --pr body.md      # also check the PR-description tells
-    python3 mylint.py --private         # private names, per ~/.claude/private-names.json
+    python3 mylint.py --private         # secrets, public IPs, emails, private names
+    python3 mylint.py --private --history   # ...in every commit and message, before publishing
     python3 mylint.py --commit msg.txt  # ...or the commit-message ones
     git show -s --format=%B HEAD | python3 mylint.py --commit
 
@@ -14,6 +15,7 @@ for 96% of spelling errors, and 4% of segments run past 60 words. Everything
 else in that corpus already scans clean, so this checks those two and stops.
 """
 
+import ipaddress
 import json
 import os
 import pathlib
@@ -137,6 +139,35 @@ PRIVATE_NAMES = pathlib.Path(
     / "private-names.json"
 )
 
+# Built in, so a machine with no names list still catches what leaks the same
+# way for everyone. Each pattern is specific enough that a hit is worth reading.
+SECRETS = [
+    (r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----", "private key"),
+    (r"\bAKIA[0-9A-Z]{16}\b", "AWS access key"),
+    (r"\bgh[pousr]_[A-Za-z0-9]{36,}\b", "GitHub token"),
+    (r"\bgithub_pat_[A-Za-z0-9_]{50,}\b", "GitHub token"),
+    (r"\bxox[abprs]-[A-Za-z0-9-]{10,}", "Slack token"),
+    (r"\bsk-ant-[A-Za-z0-9_-]{20,}", "Anthropic key"),
+    (r"\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}", "OpenAI key"),
+    (r"\bAIza[0-9A-Za-z_-]{35}\b", "Google API key"),
+    (r"\b[rs]k_live_[0-9A-Za-z]{20,}", "Stripe live key"),
+    (r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)\b[\"']?"
+     r"\s*[:=]\s*[\"']([^\"'\s]{8,})[\"']", "credential"),
+]
+# A credential whose value is one of these is a stand-in, not a secret.
+PLACEHOLDER = re.compile(r"(?i)example|changeme|placeholder|dummy|fixture|redacted|xxx|"
+                         r"your[_-]|\$\{|\{\{|<[^>]+>|\*\*\*")
+
+IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+# Public resolvers appear in every network doc and identify nobody.
+PUBLIC_RESOLVERS = {"1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"}
+
+EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b")
+# Addresses that reach nobody: the reserved example domains, noreply senders,
+# and the git@ user of an SSH remote.
+PUBLIC_EMAIL = re.compile(r"(?i)^(?:git|no-?reply)@|@(?:[a-z0-9-]+\.)*example\.(?:com|org|net)$"
+                          r"|@users\.noreply\.github\.com$|\.(?:example|test|invalid|localhost)$")
+
 
 def private_rules():
     """(patterns, allow), or None when this machine has no list to check against.
@@ -152,6 +183,33 @@ def private_rules():
         sys.exit(f"{PRIVATE_NAMES} is not valid JSON ({err})")
     patterns = [(entry["match"], entry["why"]) for entry in rules.get("patterns", [])]
     return patterns, tuple(rules.get("allow", ()))
+
+
+def line_findings(line: str, patterns, allow):
+    """What on this line should not be published, first finding only."""
+    if any(ok in line for ok in allow):
+        return None
+    for pattern, why in SECRETS:
+        found = re.search(pattern, line)
+        if found and not (found.groups() and PLACEHOLDER.search(found.group(1))):
+            return f"{why}: {found.group()[:40]}"
+    for match in IPV4.finditer(line):
+        try:
+            address = ipaddress.ip_address(match.group())
+        except ValueError:
+            continue
+        # is_global is false for the private and documentation ranges; a
+        # multicast group such as SSDP's is a protocol constant, not a host.
+        if address.is_global and not address.is_multicast and match.group() not in PUBLIC_RESOLVERS:
+            return f"public IP address: {match.group()}"
+    for match in EMAIL.finditer(line):
+        if not PUBLIC_EMAIL.search(match.group()):
+            return f"email address: {match.group()}"
+    for pattern, why in patterns:
+        found = re.search(pattern, line)
+        if found:
+            return f"{why}: {found.group()}"
+    return None
 
 
 def tracked_files(root: str = "."):
@@ -174,13 +232,36 @@ def check_private(root, patterns, allow):
         except (UnicodeDecodeError, OSError):
             continue  # binary or unreadable
         for number, line in enumerate(text.splitlines(), 1):
-            if any(ok in line for ok in allow):
+            why = line_findings(line, patterns, allow)
+            if why:
+                yield name, number, why, line.strip()[:90]
+
+
+def check_history(root, patterns, allow):
+    """Every line any commit added, and every commit message. Publishing a repo
+    publishes its history, so a leak removed from the tree still counts."""
+    log = subprocess.run(["git", "log", "--all", "-p", "--no-color", "--format=COMMIT %h%n%B"],
+                         cwd=root, capture_output=True, text=True, errors="replace")
+    if log.returncode != 0:
+        yield None, 0, "not a git repository", ""
+        return
+    commit, where = "?", "(message)"
+    for line in log.stdout.splitlines():
+        if line.startswith("COMMIT "):
+            commit, where = line.split()[1], "(message)"
+            continue
+        if line.startswith("+++ b/"):
+            where = line[6:]
+            continue
+        if line.startswith(("diff --git", "index ", "--- ", "@@", "+++ ")):
+            continue
+        if where != "(message)":
+            if not line.startswith("+"):
                 continue
-            for pattern, why in patterns:
-                found = re.search(pattern, line)
-                if found:
-                    yield name, number, f"{why}: {found.group()}", line.strip()[:90]
-                    break
+            line = line[1:]
+        why = line_findings(line, patterns, allow)
+        if why:
+            yield f"{commit} {where}", 0, why, line.strip()[:90]
 
 
 WARNED = set()
@@ -210,24 +291,26 @@ def scan(script: str, text: str):
 
 
 def report_private(args) -> int:
+    history = "--history" in args
+    args = [a for a in args if a != "--history"]
     rules = private_rules()
     if rules is None:
-        print(f"no private names list at {PRIVATE_NAMES}")
-        print("copy config/private-names.example.json there and put the real names in")
-        print("it, since those stay out of this repo on purpose")
-        return 2
+        print(f"no private names list at {PRIVATE_NAMES}; built-in checks only")
+        print("(copy config/private-names.example.json there to add your own names)\n")
+        rules = ([], ())
     root = args[0] if args else "."
-    hits = list(check_private(root, *rules))
+    hits = list((check_history if history else check_private)(root, *rules))
     if hits and hits[0][0] is None:
         print(hits[0][2])
         return 0
     for name, number, why, line in hits:
-        print(f"{name}:{number}  {why}")
+        print(f"{name}:{number}  {why}" if number else f"{name}  {why}")
         print(f"    {line}")
-    print(f"\n{len(hits)} private name{'' if len(hits) == 1 else 's'} in tracked files")
+    scope = "commits and messages" if history else "tracked files"
+    print(f"\n{len(hits)} private finding{'' if len(hits) == 1 else 's'} in {scope}")
     if hits:
-        print("replace with a neutral stand-in (acme, example.com, APP_PASSWORD),")
-        print("and read the result: phrase replacement leaves grammar behind it")
+        print("replace with a neutral stand-in (acme, example.com, 203.0.113.10,")
+        print("APP_PASSWORD) and read the result: replacement leaves grammar behind it")
     return 1 if hits else 0
 
 

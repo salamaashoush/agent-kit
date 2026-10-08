@@ -1025,11 +1025,10 @@ def doctor():
 
     found = subprocess.run([sys.executable, str(REPO / "tools" / "mylint.py"), "--private"],
                            cwd=REPO, capture_output=True, text=True)
-    if found.returncode == 2:
+    if "no private names list at" in found.stdout:
         checked("private names list", False, "none here, see config/private-names.example.json")
-    else:
-        counted = [line for line in found.stdout.splitlines() if "private name" in line]
-        checked("no private names", found.returncode == 0, counted[-1] if counted else "")
+    counted = [line for line in found.stdout.splitlines() if "private finding" in line]
+    checked("nothing private in tracked files", found.returncode == 0, counted[-1] if counted else "")
 
     return all(checks)
 

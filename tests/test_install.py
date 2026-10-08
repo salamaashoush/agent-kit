@@ -128,6 +128,23 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(installer.link(ROOT / "CLAUDE.md", link, False), "keep")
             self.assertEqual(link.resolve(), original)
 
+    def test_a_hook_timeout_reaches_settings(self):
+        settings = {}
+        hook = {"event": "PreToolUse", "matcher": "Bash", "command": "acme hook",
+                "replaces": [], "async": False, "timeout": 10, "tool": "acme"}
+        installer.merge_hooks(settings, [hook])
+        entry = settings["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertEqual(entry, {"type": "command", "command": "acme hook", "timeout": 10})
+
+    def test_setup_and_teardown_name_the_host_directory(self):
+        registry = {"acme": {"setup": ["python3 {home}/acme.py add"],
+                             "teardown": ["python3 {home}/acme.py remove"]}}
+        with patch.object(installer, "registry", return_value=registry):
+            steps = installer.plan()
+        home = str(installer.CLAUDE)
+        self.assertEqual(steps["setup"]["acme"], {"run": [f"python3 {home}/acme.py add"],
+                                                  "undo": [f"python3 {home}/acme.py remove"]})
+
 
 if __name__ == "__main__":
     unittest.main()

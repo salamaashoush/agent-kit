@@ -18,6 +18,12 @@ doc = "tools/docs/rtk.md"
 # `rtk hook codex` arrived after 0.49. An older rtk exits 2 on it, which Codex
 # reads as a block, so every shell command would fail; such a Codex gets no hook.
 codex_requires = "rtk hook codex --help"
+# Some rewrites change what a command means: rtk's grep keeps `-h` as its help
+# flag, so `grep -h` printed usage instead of matches, and `rtk ls` drops the
+# owner and dates `ls -l` asked for. This keeps those out of rtk's rewrite,
+# editing only `[hooks] exclude_commands` in rtk's own config.
+setup = ["python3 {home}/rtk-excludes.py add"]
+teardown = ["python3 {home}/rtk-excludes.py remove"]
 
 # rtk auto-allows a rewrite only when the original command matches a
 # `permissions.allow` rule; otherwise Claude prompts on `rtk ...`, which is not
@@ -26,6 +32,9 @@ codex_requires = "rtk hook codex --help"
 event = "PreToolUse"
 matcher = "Bash"
 command = "rtk hook claude"
+# Every Bash call waits on this hook; a hung rtk must not hold one for the
+# host's default minute.
+timeout = 10
 # Codex rejects `updatedInput` without `permissionDecision: "allow"`, which
 # `rtk hook codex` supplies and `rtk hook claude` does not.
 codex_command = "rtk hook codex"

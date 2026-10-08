@@ -68,9 +68,10 @@ survives this clone moving, the same way the herd hooks do.
 
 A tool that ships its own installer is wired by running it: `setup` lists the
 commands for Claude and `codex_setup` those for Codex, each run on every
-install, so they have to be safe to repeat. `teardown` and `codex_teardown` are
-recorded when the install runs, which is what lets `--uninstall`, or deleting
-the block, undo a tool whose definition is gone.
+install, so they have to be safe to repeat. `{home}` works in them as it does in
+a hook. `teardown` and `codex_teardown` are recorded when the install runs,
+which is what lets `--uninstall`, or deleting the block, undo a tool whose
+definition is gone; an uninstall runs them before it removes any link.
 
 `probe` is the whole conditional. No binary means no hook, no MCP server, and no
 notes in the context, so the same clone installs cleanly on a machine that has
@@ -86,6 +87,9 @@ matters; `codex = false` withholds it entirely. `codex_command` gives Codex a
 different command, which is how `rtk` runs `rtk hook codex` there, and a
 tool's `codex_requires` is a command that must succeed before Codex gets any of
 it, since an rtk older than that subcommand would block every shell command.
+A hook's `timeout`, in seconds, reaches Claude's settings: the `rtk` hook sits in
+front of every Bash call, so it gets ten seconds rather than the default
+minute.
 
 ## Codex
 

@@ -32,4 +32,11 @@ matches a `Bash(...)` allow rule; otherwise Claude asks about `rtk ...`. Codex
 runs `rtk hook codex`, and its own approval and sandbox still apply to the
 rewritten command. After a hook change, approve it in Codex's `/hooks`.
 
+Two rewrites change what a command means, so `install.sh` keeps them out
+through rtk's own `[hooks] exclude_commands`: `grep` with `-h` (rtk's grep
+reads it as its help flag and prints usage instead of matches) and `ls` with
+`-l` (rtk drops the owner and dates). Those run as the plain command. A
+truncated result names its full copy, or `rtk proxy <cmd>` runs a command
+unfiltered.
+
 `rtk --help` lists the rest.

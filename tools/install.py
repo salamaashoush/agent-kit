@@ -88,7 +88,8 @@ def plan() -> dict:
              (TOOLS_LOCAL, CLAUDE / "tools.local.md"),
              (REPO / "tools" / "mylint.py", CLAUDE / "mylint.py"),
              (REPO / "tools" / "herd.py", CLAUDE / "herd.py"),
-             (REPO / "tools" / "herd-event.py", CLAUDE / "herd-event.py")]
+             (REPO / "tools" / "herd-event.py", CLAUDE / "herd-event.py"),
+             (REPO / "tools" / "rtk-excludes.py", CLAUDE / "rtk-excludes.py")]
     for skill in sorted(p for p in (REPO / "skills").iterdir() if p.is_dir()):
         links.append((skill, CLAUDE / "skills" / skill.name))
 
@@ -98,15 +99,18 @@ def plan() -> dict:
         if not where:
             continue
         present[name] = where
+        home = shlex.quote(str(CLAUDE))
         if "setup" in tool:
-            setup[name] = {"run": tool["setup"], "undo": tool.get("teardown", [])}
+            setup[name] = {"run": [c.format(home=home) for c in tool["setup"]],
+                           "undo": [c.format(home=home) for c in tool.get("teardown", [])]}
         for hook in tool.get("hooks", []):
             hooks.append({
                 "event": hook["event"],
                 "matcher": hook.get("matcher"),
-                "command": hook["command"].format(home=shlex.quote(str(CLAUDE))),
+                "command": hook["command"].format(home=home),
                 "replaces": hook.get("replaces", []),
                 "async": hook.get("async", False),
+                "timeout": hook.get("timeout"),
                 "tool": name,
             })
         if "mcp" in tool:
@@ -217,6 +221,8 @@ def merge_hooks(settings: dict, hooks: list):
         entry = {"type": "command", "command": hook["command"]}
         if hook["async"]:
             entry["async"] = True
+        if hook.get("timeout"):
+            entry["timeout"] = hook["timeout"]
         return entry
 
     record, changes = [], []
@@ -849,6 +855,11 @@ def uninstall(dry_run: bool):
     if dry_run:
         print("dry run, nothing will change\n")
 
+    # Teardowns first: one may run a script this install linked into the host
+    # directory, and the links go next.
+    for undo in (saved.get("setup") or {}).values():
+        run_commands(undo, dry_run)
+
     for path in saved.get("links", []):
         dest = pathlib.Path(path)
         if dest.is_symlink() and REPO in pathlib.Path(os.readlink(dest)).parents:
@@ -900,8 +911,6 @@ def uninstall(dry_run: bool):
             print("  remove   statusLine")
 
     write_settings(settings, dry_run)
-    for undo in (saved.get("setup") or {}).values():
-        run_commands(undo, dry_run)
     uninstall_codex(saved.get("codex") or {}, dry_run)
     if TOOLS_LOCAL.exists():
         print(f"  remove   {short(TOOLS_LOCAL)}")

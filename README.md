@@ -168,7 +168,7 @@ for byte. One state file rather than one per host, so one `--uninstall` undoes
 both and neither can be left half wired.
 
 **Version anything private.** Credentials, work config, the `--private`
-patterns and the generated `tools.local.md` all stay out of git.
+names and the generated `tools.local.md` all stay out of git.
 
 ## The status line
 
@@ -231,7 +231,7 @@ Four modes, all exiting non-zero when they find something:
 python3 ~/.claude/mylint.py draft.md                        # spelling and run-ons
 python3 ~/.claude/mylint.py --commit msg.txt                # commit-message shape
 python3 ~/.claude/mylint.py --pr body.md                    # PR-description shape
-python3 ~/.claude/mylint.py --private                          # private names
+python3 ~/.claude/mylint.py --private                       # private names
 git show -s --format=%B HEAD | python3 ~/.claude/mylint.py --commit
 pbpaste | python3 ~/.claude/mylint.py
 ```
@@ -247,11 +247,11 @@ those are not the tell.
 Rerun the numbers against a fresh sample before trusting them on someone else's
 writing. They describe one person.
 
-`--private` reads its patterns from `~/.claude/private-names.json`, which this repo
-does not carry and must not: writing those names here in order to catch
-them would publish them. `config/private-names.example.json` shows the shape with
-`acme` stand-ins. Without that file `--private` exits 2 and says where it looked,
-rather than reporting a repo clean because it had nothing to look for.
+`--private` reads its patterns from `~/.claude/private-names.json`, which this
+repo does not carry and must not: writing those names here in order to catch
+them would publish them. `config/private-names.example.json` shows the shape
+with `acme` stand-ins. Without that file `--private` exits 2 and says where it
+looked, rather than reporting a repo clean because it had nothing to look for.
 
 The AI-tell and structure checks come from unslop's scanners, read from the
 vendored copy in `skills/unslop/scripts`. They used to be read from a second
@@ -286,6 +286,6 @@ them and written to `~/.claude/skills` on install. A copy here would fork them.
 **Credentials, and any setting this repo does not name.** `--doctor` reports
 what is wired without printing the file.
 
-**Any name from private or client work, in any file.** Not in a fixture, not in a doc example,
-and not in the pattern that exists to catch it. `--private` is the gate and
-`--doctor` runs it.
+**Any name from private or client work, in any file.** Not in a fixture, not
+in a doc example, and not in the pattern that exists to catch it. `--private`
+is the gate and `--doctor` runs it.

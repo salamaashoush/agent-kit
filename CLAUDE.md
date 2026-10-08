@@ -108,17 +108,16 @@ own, the library's documented extension points, or an upstream issue. Typing
 
 ## Public repos stay generic
 
-Treat this as a release gate
-rather than a style preference.
+Treat this as a release gate rather than a style preference.
 
-Anything published under my own name (ferridriver and everything like it) stays
-free of names from private or client work: no company URLs, no `@company/...` package
-specifiers, no `COMPANY_*` environment variables, no product names in comments,
-no internal hostnames, no teammate names, no real addresses. Fixtures, doc
-examples, and config samples all use neutral stand-ins: `acme`, `example.com`,
-`APP_PASSWORD`, `API_TOKEN`.
+Anything published under my own name (ferridriver and everything like it) uses
+no names from private or client work: no company URLs, no `@company/...`
+package specifiers, no `COMPANY_*` environment variables, no product names in
+comments, no internal hostnames, no teammate names, no real addresses. Fixtures,
+doc examples, and config samples all use neutral stand-ins: `acme`,
+`example.com`, `APP_PASSWORD`, `API_TOKEN`.
 
-Sweep before publishing, and again before any push that adds documentation or
+Check before publishing, and again before any push that adds documentation or
 fixtures:
 
 ```

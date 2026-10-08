@@ -5,7 +5,7 @@ then hand it to unslop's scanners for the AI tells.
     python3 mylint.py draft.md
     pbpaste | python3 mylint.py
     python3 mylint.py --pr body.md      # also check the PR-description tells
-    python3 mylint.py --private            # private names, per ~/.claude/private-names.json
+    python3 mylint.py --private         # private names, per ~/.claude/private-names.json
     python3 mylint.py --commit msg.txt  # ...or the commit-message ones
     git show -s --format=%B HEAD | python3 mylint.py --commit
 
@@ -128,8 +128,8 @@ def check_commit(text: str):
             yield f"AI signature: {signature!r}"
 
 
-# The list itself lives outside this repo. Writing a private name here in order to
-# catch it would publish it, so only the shape is versioned, in
+# The list itself lives outside this repo: writing a private name here in order
+# to catch it would publish it, so only the shape is versioned, in
 # config/private-names.example.json.
 PRIVATE_NAMES = pathlib.Path(
     os.environ.get("MYLINT_PRIVATE_NAMES")
